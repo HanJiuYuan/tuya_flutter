@@ -31,7 +31,6 @@
   - [6.6 摄像头（IPC）](#66-摄像头ipc)
 - [7. 常见问题（FAQ）](#7-常见问题faq)
 - [8. 联系方式](#8-联系方式)
-- [9. License](#9-license)
 
 ---
 
@@ -340,7 +339,3 @@ AndroidView(
 - Email: 656213779@qq.com
 
 ---
-
-## 9. License
-
-MIT License. 详见 [LICENSE](LICENSE)。
