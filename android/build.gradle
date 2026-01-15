@@ -1,0 +1,106 @@
+// tuya_flutter_ha_sdk/android/build.gradle
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        jcenter()
+
+        // Tuya Maven repositories (needed to compile against Tuya SDK)
+        maven { url 'https://maven-other.tuya.com/repository/maven-releases/' }
+        maven { url 'https://maven-other.tuya.com/repository/maven-commercial-releases/' }
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.7.0"
+    }
+}
+
+apply plugin: 'com.android.library'
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        jcenter()
+
+        // Tuya Maven repositories (for plugin + transitive Tuya SDK dependencies)
+        maven { url 'https://maven-other.tuya.com/repository/maven-releases/' }
+        maven { url 'https://maven-other.tuya.com/repository/maven-commercial-releases/' }
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+    }
+}
+
+android {
+    namespace "us.kpmsg.tuya_flutter_ha_sdk"
+    compileSdkVersion 35
+
+    defaultConfig {
+        // Tuya’s BizBundles require at least SDK 23
+        minSdkVersion 23
+        targetSdkVersion 35
+
+        // You can also specify versionCode/versionName here if needed:
+        // versionCode 1
+        // versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    packaging {
+        jniLibs {
+            // 处理重复的 native 库，但确保包含所有必要的库
+            pickFirsts += [
+                '**/libc++_shared.so',
+                '**/libthing_security_algorithm.so',
+                '**/libtuya*.so',
+                '**/libthing*.so'
+            ]
+            // 确保包含所有 native 库（不要排除任何库）
+            useLegacyPackaging = false
+        }
+        resources {
+            excludes += [
+                'META-INF/DEPENDENCIES',
+                'META-INF/LICENSE',
+                'META-INF/LICENSE.txt',
+                'META-INF/NOTICE',
+                'META-INF/NOTICE.txt'
+            ]
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            testLogging {
+                events "passed", "skipped", "failed", "standardOut", "standardError"
+                outputs.upToDateWhen { false }
+                showStandardStreams = true
+            }
+        }
+    }
+}
+
+dependencies {
+    // Tuya Home SDK Core (ensure version matches your downloaded SDK, e.g., 6.2.2)
+    implementation "com.thingclips.smart:thingsmart:6.2.2"
+
+    // Tuya BizBundles BOM (aligns all BizBundles to version 6.2.16)
+    implementation platform("com.thingclips.smart:thingsmart-BizBundlesBom:6.2.16")
+
+    implementation 'com.thingclips.smart:thingsmart-ipcsdk:6.4.2'
+    // Example BizBundle: Device Activator（摄像头配网用）
+    implementation "com.thingclips.smart:thingsmart-bizbundle-device_activator"
+    implementation "com.alibaba:fastjson:1.1.67.android"
+    implementation "com.squareup.okhttp3:okhttp-urlconnection:3.14.9"
+
+    // SoLoader (required by Tuya SDK)
+    implementation "com.facebook.soloader:soloader:0.10.4+"
+
+    // Unit test dependencies
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.mockito:mockito-core:5.0.0"
+}
