@@ -88,6 +88,8 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     private EventChannel eventChannel;
     private EventSink eventSink;
 
+    private TuyaCameraPlugin tuyaCameraPlugin;
+
     private IBleActivator mBleActivator;
 
     private IMultiModeActivator mComboActivator;
@@ -174,7 +176,9 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                 eventSink = null;
             }
         });
-        TuyaCameraPlugin tuyaCameraPlugin=new TuyaCameraPlugin();
+        if (tuyaCameraPlugin == null) {
+            tuyaCameraPlugin = new TuyaCameraPlugin();
+        }
         tuyaCameraPlugin.registerPlugin(binding);
     }
 
@@ -221,6 +225,14 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         channel.setMethodCallHandler(null);
+        if (tuyaCameraPlugin != null) {
+            try {
+                tuyaCameraPlugin.unregisterPlugin();
+            } catch (Throwable t) {
+                Log.w("TuyaFlutterHaSdk", "tuyaCameraPlugin.unregisterPlugin failed", t);
+            }
+            tuyaCameraPlugin = null;
+        }
     }
 
     @Override

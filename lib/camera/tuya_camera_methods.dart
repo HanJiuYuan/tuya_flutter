@@ -96,6 +96,16 @@ class TuyaCameraMethods {
     return TuyaCameraPlatform.instance.stopPreview();
   }
 
+  /// 设置实时预览清晰度（2=标清，4=高清）
+  static Future<void> setDefinition({required int definition}) {
+    return TuyaCameraPlatform.instance.setDefinition(definition: definition);
+  }
+
+  /// 获取当前实时预览清晰度
+  static Future<int> getDefinition() {
+    return TuyaCameraPlatform.instance.getDefinition();
+  }
+
   /// 开始对讲
   static Future<void> startTalk() {
     print('开始对讲');
@@ -137,5 +147,113 @@ class TuyaCameraMethods {
   /// 切换扬声器/听筒播放（true=扬声器，false=听筒）
   static Future<void> setLoudSpeakerStatus({required bool enable}) {
     return TuyaCameraPlatform.instance.setLoudSpeakerStatus(enable: enable);
+  }
+
+  /// 查询某年某月有录像的日期列表
+  static Future<List<int>> queryRecordDaysByMonth({
+    required String deviceId,
+    required int year,
+    required int month,
+  }) {
+    return TuyaCameraPlatform.instance.queryRecordDaysByMonth(
+      deviceId: deviceId,
+      year: year,
+      month: month,
+    );
+  }
+
+  /// 查询某天的视频片段时间信息
+  static Future<List<Map<String, dynamic>>> queryRecordTimeSliceByDay({
+    required String deviceId,
+    required int year,
+    required int month,
+    required int day,
+  }) {
+    return TuyaCameraPlatform.instance.queryRecordTimeSliceByDay(
+      deviceId: deviceId,
+      year: year,
+      month: month,
+      day: day,
+    );
+  }
+
+  /// 开始回放
+  static Future<void> startPlayback({
+    required String deviceId,
+    required int startTime,
+    required int endTime,
+    required int playTime,
+  }) {
+    return TuyaCameraPlatform.instance.startPlayback(
+      deviceId: deviceId,
+      startTime: startTime,
+      endTime: endTime,
+      playTime: playTime,
+    );
+  }
+
+  /// 停止回放
+  static Future<void> stopPlayback({required String deviceId}) {
+    return TuyaCameraPlatform.instance.stopPlayback(deviceId: deviceId);
+  }
+
+  /// 获取摄像头报警消息列表（含附件图片/视频）
+  static Future<List<Map<String, dynamic>>> getCameraMessages({
+    required String deviceId,
+    int offset = 0,
+    int limit = 20,
+    List<String>? msgCodes,
+  }) {
+    return TuyaCameraPlatform.instance.getCameraMessages(
+      deviceId: deviceId,
+      offset: offset,
+      limit: limit,
+      msgCodes: msgCodes,
+    );
+  }
+
+  /// 创建视频消息播放器并创建云设备
+  static Future<void> createCloudVideoPlayer({required String deviceId}) {
+    return TuyaCameraPlatform.instance.createCloudVideoPlayer(
+      deviceId: deviceId,
+    );
+  }
+
+  /// 播放报警消息中的云视频
+  static Future<void> playCloudVideo({
+    required String videoUrl,
+    required int startTime,
+    required String encryptKey,
+  }) {
+    return TuyaCameraPlatform.instance.playCloudVideo(
+      videoUrl: videoUrl,
+      startTime: startTime,
+      encryptKey: encryptKey,
+    );
+  }
+
+  /// 暂停云视频播放
+  static Future<void> pauseCloudVideo() {
+    return TuyaCameraPlatform.instance.pauseCloudVideo();
+  }
+
+  /// 恢复云视频播放
+  static Future<void> resumeCloudVideo() {
+    return TuyaCameraPlatform.instance.resumeCloudVideo();
+  }
+
+  /// 停止云视频播放
+  static Future<void> stopCloudVideo() {
+    return TuyaCameraPlatform.instance.stopCloudVideo();
+  }
+
+  /// 销毁云视频播放器
+  static Future<void> destroyCloudVideo() {
+    return TuyaCameraPlatform.instance.destroyCloudVideo();
+  }
+
+  /// 设置云视频静音
+  static Future<void> setCloudVideoMute({required int mute}) {
+    return TuyaCameraPlatform.instance.setCloudVideoMute(mute: mute);
   }
 }

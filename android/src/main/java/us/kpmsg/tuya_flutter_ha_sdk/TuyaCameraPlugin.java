@@ -31,8 +31,12 @@ import com.thingclips.smart.camera.camerasdk.thingplayer.callback.OperationDeleg
 import com.thingclips.smart.android.camera.sdk.bean.IPCSnapshotConfig;
 import com.thingclips.smart.sdk.api.IThingDataCallback;
 import com.thingclips.smart.sdk.bean.message.MessageListBean;
+import com.thingclips.smart.ipc.messagecenter.bean.CameraMessageBean;
+import com.thingclips.smart.ipc.messagecenter.bean.CameraMessageClassifyBean;
 import com.thingclips.smart.sdk.bean.push.PushType;
 import com.thingclips.smart.android.device.bean.SchemaBean;
+import com.thingclips.smart.camera.camerasdk.thingplayer.callback.OperationCallBack;
+import com.thingclips.smart.camera.ipccamerasdk.msgvideo.IThingCloudVideo;
 import com.facebook.drawee.backends.pipeline.Fresco;
 
 import android.app.Application;
@@ -69,9 +73,18 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
     private EventChannel eventChannel;
     private EventSink eventSink;
     private TuyaCameraViewFactory tuyaCameraViewFactory;
+    private IThingCloudVideo mCloudVideo;
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    private boolean registered = false;
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding binding) {
+        if (registered) {
+            Log.i("CAMERA", "TuyaCameraPlugin already registered, skip onAttachedToEngine");
+            return;
+        }
+        registered = true;
         appContext = (Application) binding.getApplicationContext();
         // 注册全局 Activity 生命周期回调，用于标记前后台状态
         try {
@@ -138,6 +151,11 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
     }
 
     public void registerPlugin(FlutterPluginBinding binding) {
+        if (registered) {
+            Log.i("CAMERA", "TuyaCameraPlugin already registered, skip registerPlugin");
+            return;
+        }
+        registered = true;
         appContext = (Application) binding.getApplicationContext();
         // 确保通过旧的 registerPlugin 路径也能注册生命周期回调
         try {
@@ -171,6 +189,36 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
         });
         tuyaCameraViewFactory = new TuyaCameraViewFactory();
         binding.getPlatformViewRegistry().registerViewFactory("tuya_camera_view", tuyaCameraViewFactory);
+    }
+
+    public void unregisterPlugin() {
+        try {
+            if (eventChannel != null) {
+                eventChannel.setStreamHandler(null);
+            }
+        } catch (Throwable t) {
+            Log.w("CAMERA", "eventChannel.setStreamHandler(null) failed", t);
+        }
+        try {
+            if (channel != null) {
+                channel.setMethodCallHandler(null);
+            }
+        } catch (Throwable t) {
+            Log.w("CAMERA", "channel.setMethodCallHandler(null) failed", t);
+        }
+        try {
+            if (appContext != null) {
+                appContext.unregisterActivityLifecycleCallbacks(this);
+            }
+        } catch (Throwable t) {
+            Log.w("CAMERA", "unregisterActivityLifecycleCallbacks failed", t);
+        }
+
+        eventSink = null;
+        eventChannel = null;
+        channel = null;
+        tuyaCameraViewFactory = null;
+        registered = false;
     }
 
     // ===== Application.ActivityLifecycleCallbacks 实现，用于标记前后台 =====
@@ -325,6 +373,21 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
                 }
                 result.success(null);
                 break;
+            case "setDefinition":
+                Number definition = call.argument("definition");
+                int definitionValue = definition != null ? definition.intValue() : 0;
+                if (tuyaCameraViewFactory != null && definitionValue > 0) {
+                    tuyaCameraViewFactory.setDefinition(definitionValue);
+                }
+                result.success(null);
+                break;
+            case "getDefinition":
+                if (tuyaCameraViewFactory != null) {
+                    result.success(tuyaCameraViewFactory.getDefinition());
+                } else {
+                    result.success(null);
+                }
+                break;
             case "startTalk":
                 if (tuyaCameraViewFactory != null) {
                     tuyaCameraViewFactory.startTalk();
@@ -410,6 +473,66 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
 
                 break;
 
+            case "getCameraMessages": {
+                String cmDevId = call.argument("deviceId");
+                Number cmOffset = call.argument("offset");
+                Number cmLimit = call.argument("limit");
+                String[] cmMsgCodes = null;
+                java.util.List<String> codesList = call.argument("msgCodes");
+                if (codesList != null && !codesList.isEmpty()) {
+                    cmMsgCodes = codesList.toArray(new String[0]);
+                }
+                if (cmDevId == null || cmDevId.isEmpty()) {
+                    result.error("MISSING_ARGS", "deviceId required", null);
+                    break;
+                }
+                int offsetVal = cmOffset != null ? cmOffset.intValue() : 0;
+                int limitVal = cmLimit != null ? cmLimit.intValue() : 20;
+                IThingIPCMsg ipcMsg = ThingIPCSdk.getMessage();
+                if (ipcMsg == null) {
+                    result.error("SDK_ERROR", "ThingIPCSdk.getMessage() returned null", null);
+                    break;
+                }
+                IThingCameraMessage camMsg = ipcMsg.createCameraMessage();
+                if (camMsg == null) {
+                    result.error("SDK_ERROR", "createCameraMessage() returned null", null);
+                    break;
+                }
+                long now = System.currentTimeMillis() / 1000;
+                long thirtyDaysAgo = now - 30L * 24 * 3600;
+                camMsg.getAlarmDetectionMessageList(cmDevId, offsetVal, limitVal, cmMsgCodes, (int) thirtyDaysAgo, (int) now, new IThingResultCallback<java.util.List<CameraMessageBean>>() {
+                    @Override
+                    public void onSuccess(java.util.List<CameraMessageBean> beans) {
+                        java.util.ArrayList<java.util.HashMap<String, Object>> list = new java.util.ArrayList<>();
+                        if (beans != null) {
+                            for (CameraMessageBean bean : beans) {
+                                java.util.HashMap<String, Object> map = new java.util.HashMap<>();
+                                map.put("msgId", bean.getId() != null ? bean.getId() : "");
+                                map.put("msgCode", bean.getMsgCode() != null ? bean.getMsgCode() : "");
+                                map.put("msgTitle", bean.getMsgTitle() != null ? bean.getMsgTitle() : "");
+                                map.put("msgContent", bean.getMsgContent() != null ? bean.getMsgContent() : "");
+                                map.put("msgType", bean.getMsgType());
+                                map.put("attachPic", bean.getAttachPics() != null ? bean.getAttachPics() : "");
+                                String[] vids = bean.getAttachVideos();
+                                java.util.ArrayList<String> vidList = new java.util.ArrayList<>();
+                                if (vids != null) { for (String v : vids) vidList.add(v); }
+                                map.put("attachVideos", vidList);
+                                map.put("time", bean.getTime());
+                                map.put("dateTime", bean.getDateTime() != null ? bean.getDateTime() : "");
+                                list.add(map);
+                            }
+                        }
+                        result.success(list);
+                    }
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        result.error("GET_CAMERA_MESSAGES_FAILED", errorMessage, errorCode);
+                    }
+                });
+                break;
+            }
+          
+       
             case "setDeviceDpConfigs":
                 // publishDps function of Tuya SDK is called
                 String setDpDevId = call.argument("deviceId");
@@ -492,13 +615,20 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
                             }
                         }
 
-                        if (currentIsZeroOne && (raw instanceof Boolean || raw instanceof String)) {
+                        boolean rawIsBoolLikeString = false;
+                        if (raw instanceof String) {
+                            String s = ((String) raw).trim().toLowerCase();
+                            rawIsBoolLikeString =
+                                    "0".equals(s) || "1".equals(s) || "true".equals(s) || "false".equals(s);
+                        }
+
+                        if (currentIsZeroOne && (raw instanceof Boolean || rawIsBoolLikeString)) {
                             // 这种 DP（例如 106）在设备上是用 0/1 表示的开关，且本次下发值是布尔语义
                             boolean boolVal = false;
                             if (raw instanceof Boolean) {
                                 boolVal = (Boolean) raw;
                             } else if (raw instanceof String) {
-                                String s = ((String) raw).toLowerCase();
+                                String s = ((String) raw).trim().toLowerCase();
                                 boolVal = "1".equals(s) || "true".equals(s);
                             }
                             normalized = boolVal ? "1" : "0";
@@ -640,6 +770,274 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
                 });
 
                 break;
+            
+            case "queryRecordDaysByMonth":
+                // 查询某年某月有录像的日期
+                String recordDevId = call.argument("deviceId");
+                Number recordYear = call.argument("year");
+                Number recordMonth = call.argument("month");
+                
+                if (tuyaCameraViewFactory != null) {
+                    tuyaCameraViewFactory.queryRecordDaysByMonth(
+                        recordDevId, 
+                        recordYear.intValue(), 
+                        recordMonth.intValue(), 
+                        result
+                    );
+                } else {
+                    result.error("CAMERA_NOT_READY", "Camera view factory is null", null);
+                }
+                break;
+                
+            case "queryRecordTimeSliceByDay":
+                // 查询某天的视频片段
+                String sliceDevId = call.argument("deviceId");
+                Number sliceYear = call.argument("year");
+                Number sliceMonth = call.argument("month");
+                Number sliceDay = call.argument("day");
+                
+                if (tuyaCameraViewFactory != null) {
+                    tuyaCameraViewFactory.queryRecordTimeSliceByDay(
+                        sliceDevId,
+                        sliceYear.intValue(),
+                        sliceMonth.intValue(),
+                        sliceDay.intValue(),
+                        result
+                    );
+                } else {
+                    result.error("CAMERA_NOT_READY", "Camera view factory is null", null);
+                }
+                break;
+                
+            case "startPlayback":
+                // 开始回放
+                String playbackDevId = call.argument("deviceId");
+                Number startTime = call.argument("startTime");
+                Number endTime = call.argument("endTime");
+                Number playTime = call.argument("playTime");
+                
+                if (tuyaCameraViewFactory != null) {
+                    tuyaCameraViewFactory.startPlayback(
+                        playbackDevId,
+                        startTime.intValue(),
+                        endTime.intValue(),
+                        playTime.intValue(),
+                        result
+                    );
+                } else {
+                    result.error("CAMERA_NOT_READY", "Camera view factory is null", null);
+                }
+                break;
+                
+            case "stopPlayback":
+                // 停止回放
+                String stopDevId = call.argument("deviceId");
+                
+                if (tuyaCameraViewFactory != null) {
+                    tuyaCameraViewFactory.stopPlayback(stopDevId, result);
+                } else {
+                    result.error("CAMERA_NOT_READY", "Camera view factory is null", null);
+                }
+                break;
+
+            case "createCloudVideoPlayer": {
+                String cvDevId = call.argument("deviceId");
+                if (cvDevId == null || cvDevId.isEmpty()) {
+                    result.error("MISSING_ARGS", "deviceId required", null);
+                    break;
+                }
+                try {
+                    IThingIPCMsg ipcMsg = ThingIPCSdk.getMessage();
+                    if (ipcMsg == null) {
+                        result.error("SDK_ERROR", "ThingIPCSdk.getMessage() returned null", null);
+                        break;
+                    }
+                    mCloudVideo = ipcMsg.createVideoMessagePlayer();
+                    if (mCloudVideo == null) {
+                        result.error("SDK_ERROR", "createVideoMessagePlayer() returned null", null);
+                        break;
+                    }
+                    // 注册 P2P 监听
+                    mCloudVideo.registerP2PCameraListener(new com.thingclips.smart.camera.camerasdk.thingplayer.callback.AbsP2pCameraListener() {
+                        @Override
+                        public void onSessionStatusChanged(Object camera, int sessionId, int sessionStatus) {
+                            super.onSessionStatusChanged(camera, sessionId, sessionStatus);
+                            Log.i("CLOUD_VIDEO", "onSessionStatusChanged sessionId=" + sessionId + " status=" + sessionStatus);
+                        }
+                        @Override
+                        public void onReceiveFrameYUVData(int sessionId, ByteBuffer y, ByteBuffer u, ByteBuffer v, int width, int height, int nFrameRate, int nIsKeyFrame, long timestamp, long nProgress, long nDuration, Object camera) {
+                            // 通过 EventChannel 发送进度信息给 Flutter
+                            if (eventSink != null) {
+                                Map<String, Object> progressData = new HashMap<>();
+                                Map<String, Object> info = new HashMap<>();
+                                info.put("progress", nProgress);
+                                info.put("duration", nDuration);
+                                progressData.put("cloudVideoProgress", info);
+                                mainHandler.post(() -> {
+                                    if (eventSink != null) eventSink.success(progressData);
+                                });
+                            }
+                        }
+                    });
+                    // 绑定播放器 View
+                    if (tuyaCameraViewFactory != null && tuyaCameraViewFactory.tuyaCameraPlatformView != null) {
+                        Object videoView = tuyaCameraViewFactory.tuyaCameraPlatformView.getCameraView();
+                        if (videoView != null) {
+                            mCloudVideo.generateCloudCameraView((com.thingclips.smart.camera.camerasdk.thingplayer.callback.IRegistorIOTCListener) videoView);
+                        }
+                    }
+                    // 创建云设备
+                    String cachePath = appContext.getCacheDir().getPath();
+                    mCloudVideo.createCloudDevice(cachePath, cvDevId, new OperationDelegateCallBack() {
+                        @Override
+                        public void onSuccess(int sessionId, int requestId, String data) {
+                            Log.i("CLOUD_VIDEO", "createCloudDevice success");
+                            result.success(null);
+                        }
+                        @Override
+                        public void onFailure(int sessionId, int requestId, int errCode) {
+                            Log.e("CLOUD_VIDEO", "createCloudDevice failed errCode=" + errCode);
+                            result.error("CREATE_CLOUD_DEVICE_FAILED", "errCode=" + errCode, null);
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.e("CLOUD_VIDEO", "createCloudVideoPlayer exception", e);
+                    result.error("CLOUD_VIDEO_ERROR", e.getMessage(), null);
+                }
+                break;
+            }
+
+            case "playCloudVideo": {
+                String videoUrl = call.argument("videoUrl");
+                Number cvStartTime = call.argument("startTime");
+                String encryptKey = call.argument("encryptKey");
+                if (mCloudVideo == null) {
+                    result.error("CLOUD_VIDEO_NOT_READY", "Cloud video player not created", null);
+                    break;
+                }
+                int st = cvStartTime != null ? cvStartTime.intValue() : 0;
+                mCloudVideo.playVideo(videoUrl, st, encryptKey != null ? encryptKey : "",
+                    new OperationCallBack() {
+                        @Override
+                        public void onSuccess(int sessionId, int requestId, String data, Object camera) {
+                            Log.i("CLOUD_VIDEO", "playVideo success");
+                            result.success(null);
+                        }
+                        @Override
+                        public void onFailure(int sessionId, int requestId, int errCode, Object camera) {
+                            Log.e("CLOUD_VIDEO", "playVideo failed errCode=" + errCode);
+                            result.error("PLAY_CLOUD_VIDEO_FAILED", "errCode=" + errCode, null);
+                        }
+                    },
+                    new OperationCallBack() {
+                        @Override
+                        public void onSuccess(int sessionId, int requestId, String data, Object camera) {
+                            Log.i("CLOUD_VIDEO", "playVideo finished");
+                            if (mCloudVideo != null) mCloudVideo.audioClose();
+                            if (eventSink != null) {
+                                Map<String, Object> finishData = new HashMap<>();
+                                finishData.put("cloudVideoFinished", true);
+                                mainHandler.post(() -> {
+                                    if (eventSink != null) eventSink.success(finishData);
+                                });
+                            }
+                        }
+                        @Override
+                        public void onFailure(int sessionId, int requestId, int errCode, Object camera) {
+                            Log.e("CLOUD_VIDEO", "playVideo finish callback failed errCode=" + errCode);
+                            if (mCloudVideo != null) mCloudVideo.audioClose();
+                        }
+                    }
+                );
+                break;
+            }
+
+            case "pauseCloudVideo": {
+                if (mCloudVideo == null) {
+                    result.error("CLOUD_VIDEO_NOT_READY", "Cloud video player not created", null);
+                    break;
+                }
+                mCloudVideo.pauseVideo(new OperationCallBack() {
+                    @Override
+                    public void onSuccess(int sessionId, int requestId, String data, Object camera) {
+                        result.success(null);
+                    }
+                    @Override
+                    public void onFailure(int sessionId, int requestId, int errCode, Object camera) {
+                        result.error("PAUSE_CLOUD_VIDEO_FAILED", "errCode=" + errCode, null);
+                    }
+                });
+                break;
+            }
+
+            case "resumeCloudVideo": {
+                if (mCloudVideo == null) {
+                    result.error("CLOUD_VIDEO_NOT_READY", "Cloud video player not created", null);
+                    break;
+                }
+                mCloudVideo.resumeVideo(new OperationCallBack() {
+                    @Override
+                    public void onSuccess(int sessionId, int requestId, String data, Object camera) {
+                        result.success(null);
+                    }
+                    @Override
+                    public void onFailure(int sessionId, int requestId, int errCode, Object camera) {
+                        result.error("RESUME_CLOUD_VIDEO_FAILED", "errCode=" + errCode, null);
+                    }
+                });
+                break;
+            }
+
+            case "stopCloudVideo": {
+                if (mCloudVideo == null) {
+                    result.error("CLOUD_VIDEO_NOT_READY", "Cloud video player not created", null);
+                    break;
+                }
+                mCloudVideo.stopVideo(new OperationCallBack() {
+                    @Override
+                    public void onSuccess(int sessionId, int requestId, String data, Object camera) {
+                        result.success(null);
+                    }
+                    @Override
+                    public void onFailure(int sessionId, int requestId, int errCode, Object camera) {
+                        result.error("STOP_CLOUD_VIDEO_FAILED", "errCode=" + errCode, null);
+                    }
+                });
+                break;
+            }
+
+            case "destroyCloudVideo": {
+                if (mCloudVideo != null) {
+                    try {
+                        mCloudVideo.deinitCloudVideo();
+                    } catch (Exception e) {
+                        Log.w("CLOUD_VIDEO", "deinitCloudVideo exception", e);
+                    }
+                    mCloudVideo = null;
+                }
+                result.success(null);
+                break;
+            }
+
+            case "setCloudVideoMute": {
+                Number muteVal = call.argument("mute");
+                if (mCloudVideo == null) {
+                    result.error("CLOUD_VIDEO_NOT_READY", "Cloud video player not created", null);
+                    break;
+                }
+                int muteMode = muteVal != null ? muteVal.intValue() : ICameraP2P.MUTE;
+                mCloudVideo.setCloudVideoMute(muteMode, new OperationDelegateCallBack() {
+                    @Override
+                    public void onSuccess(int sessionId, int requestId, String data) {
+                        result.success(null);
+                    }
+                    @Override
+                    public void onFailure(int sessionId, int requestId, int errCode) {
+                        result.error("SET_CLOUD_MUTE_FAILED", "errCode=" + errCode, null);
+                    }
+                });
+                break;
+            }
 
         }
     }
@@ -743,6 +1141,19 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
         }
     }
 
+    public void setDefinition(int definition) {
+        if (tuyaCameraPlatformView != null) {
+            tuyaCameraPlatformView.setDefinition(definition);
+        }
+    }
+
+    public int getDefinition() {
+        if (tuyaCameraPlatformView != null) {
+            return tuyaCameraPlatformView.getDefinition();
+        }
+        return ICameraP2P.HD;
+    }
+
     public void startLocalRecording(String picPath) {
         if (tuyaCameraPlatformView != null) {
             tuyaCameraPlatformView.startLocalRecording(picPath);
@@ -752,6 +1163,38 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
     public void stopLocalRecording() {
         if (tuyaCameraPlatformView != null) {
             tuyaCameraPlatformView.stopLocalRecording();
+        }
+    }
+
+    public void queryRecordDaysByMonth(String devId, int year, int month, MethodChannel.Result result) {
+        if (tuyaCameraPlatformView != null) {
+            tuyaCameraPlatformView.queryRecordDaysByMonth(devId, year, month, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
+        }
+    }
+
+    public void queryRecordTimeSliceByDay(String devId, int year, int month, int day, MethodChannel.Result result) {
+        if (tuyaCameraPlatformView != null) {
+            tuyaCameraPlatformView.queryRecordTimeSliceByDay(devId, year, month, day, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
+        }
+    }
+
+    public void startPlayback(String devId, int startTime, int endTime, int playTime, MethodChannel.Result result) {
+        if (tuyaCameraPlatformView != null) {
+            tuyaCameraPlatformView.startPlayback(devId, startTime, endTime, playTime, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
+        }
+    }
+
+    public void stopPlayback(String devId, MethodChannel.Result result) {
+        if (tuyaCameraPlatformView != null) {
+            tuyaCameraPlatformView.stopPlayback(devId, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
         }
     }
 }
@@ -766,6 +1209,10 @@ class TuyaCameraPlatformView implements PlatformView {
     private Context pluginContext;
     private ThingCameraView cameraView;
     private boolean isTalking = false;
+
+    public ThingCameraView getCameraView() {
+        return cameraView;
+    }
     private boolean reConnect = false;
     // 是否正在播放预览流
     private boolean isPlay = false;
@@ -1219,6 +1666,14 @@ class TuyaCameraPlatformView implements PlatformView {
         internalStartPreview(videoClarity);
     }
 
+    public void setDefinition(int clarity) {
+        startPreview(clarity);
+    }
+
+    public int getDefinition() {
+        return videoClarity;
+    }
+
     // 独立暴露给 Flutter 的停止预览方法
     public void stopPreview() {
         if (mCameraP2P == null) {
@@ -1267,6 +1722,10 @@ class TuyaCameraPlatformView implements PlatformView {
                 previewSuccessData.put("sessionId", sessionId);
                 previewSuccessData.put("requestId", requestId);
                 sendEventToFlutter("startPreviewCallback", previewSuccessData);
+
+                Map<String, Object> definitionData = new HashMap<>();
+                definitionData.put("definition", clarity);
+                sendEventToFlutter("definitionChanged", definitionData);
             }
 
             @Override
@@ -1389,6 +1848,148 @@ class TuyaCameraPlatformView implements PlatformView {
         } catch (Throwable t) {
             Log.e("CAMERA", "setLoudSpeakerStatus failed", t);
         }
+    }
+
+    // 查询某年某月有录像的日期
+    public void queryRecordDaysByMonth(String queryDevId, int year, int month, MethodChannel.Result result) {
+        if (mCameraP2P == null) {
+            Log.w("CAMERA", "queryRecordDaysByMonth: mCameraP2P is null");
+            result.error("CAMERA_P2P_NULL", "Camera P2P instance is null", null);
+            return;
+        }
+        
+        mCameraP2P.queryRecordDaysByMonth(year, month, new OperationDelegateCallBack() {
+            @Override
+            public void onSuccess(int sessionId, int requestId, String data) {
+                Log.i("CAMERA", "queryRecordDaysByMonth success: " + data);
+                // data 格式: {"DataDays":["02","04","05"]}
+                try {
+                    ArrayList<Integer> days = new ArrayList<>();
+                    if (data != null && !data.isEmpty()) {
+                        org.json.JSONObject jsonObj = new org.json.JSONObject(data);
+                        if (jsonObj.has("DataDays")) {
+                            org.json.JSONArray dataDays = jsonObj.getJSONArray("DataDays");
+                            for (int i = 0; i < dataDays.length(); i++) {
+                                String dayStr = dataDays.getString(i);
+                                days.add(Integer.parseInt(dayStr));
+                            }
+                        }
+                    }
+                    mainHandler.post(() -> result.success(days));
+                } catch (Exception e) {
+                    Log.e("CAMERA", "queryRecordDaysByMonth parse error", e);
+                    mainHandler.post(() -> result.error("PARSE_ERROR", e.getMessage(), null));
+                }
+            }
+
+            @Override
+            public void onFailure(int sessionId, int requestId, int errCode) {
+                Log.e("CAMERA", "queryRecordDaysByMonth failed: " + errCode);
+                mainHandler.post(() -> result.error("QUERY_DAYS_FAILED", "Error code: " + errCode, null));
+            }
+        });
+    }
+
+    // 查询某天的视频片段
+    public void queryRecordTimeSliceByDay(String queryDevId, int year, int month, int day, MethodChannel.Result result) {
+        if (mCameraP2P == null) {
+            Log.w("CAMERA", "queryRecordTimeSliceByDay: mCameraP2P is null");
+            result.error("CAMERA_P2P_NULL", "Camera P2P instance is null", null);
+            return;
+        }
+        
+        mCameraP2P.queryRecordTimeSliceByDay(year, month, day, new OperationDelegateCallBack() {
+            @Override
+            public void onSuccess(int sessionId, int requestId, String data) {
+                Log.i("CAMERA", "queryRecordTimeSliceByDay success: " + data);
+                // data 格式: {"count":22,"items":[{"videoType":0,"eventType":0,"startTime":1770253564,"endTime":1770253594}]}
+                try {
+                    ArrayList<HashMap<String, Object>> timeSlices = new ArrayList<>();
+                    if (data != null && !data.isEmpty()) {
+                        org.json.JSONObject jsonObj = new org.json.JSONObject(data);
+                        if (jsonObj.has("items")) {
+                            org.json.JSONArray items = jsonObj.getJSONArray("items");
+                            for (int i = 0; i < items.length(); i++) {
+                                org.json.JSONObject item = items.getJSONObject(i);
+                                HashMap<String, Object> slice = new HashMap<>();
+                                slice.put("startTime", item.getInt("startTime"));
+                                slice.put("endTime", item.getInt("endTime"));
+                                timeSlices.add(slice);
+                            }
+                        }
+                    }
+                    mainHandler.post(() -> result.success(timeSlices));
+                } catch (Exception e) {
+                    Log.e("CAMERA", "queryRecordTimeSliceByDay parse error", e);
+                    mainHandler.post(() -> result.error("PARSE_ERROR", e.getMessage(), null));
+                }
+            }
+
+            @Override
+            public void onFailure(int sessionId, int requestId, int errCode) {
+                Log.e("CAMERA", "queryRecordTimeSliceByDay failed: " + errCode);
+                mainHandler.post(() -> result.error("QUERY_SLICES_FAILED", "Error code: " + errCode, null));
+            }
+        });
+    }
+
+    // 开始回放
+    public void startPlayback(String playbackDevId, int startTime, int endTime, int playTime, MethodChannel.Result result) {
+        if (mCameraP2P == null) {
+            Log.w("CAMERA", "startPlayback: mCameraP2P is null");
+            result.error("CAMERA_P2P_NULL", "Camera P2P instance is null", null);
+            return;
+        }
+        
+        mCameraP2P.startPlayBack(startTime, endTime, playTime, 
+            new OperationDelegateCallBack() {
+                @Override
+                public void onSuccess(int sessionId, int requestId, String data) {
+                    Log.i("CAMERA", "startPlayback success: " + data);
+                    mainHandler.post(() -> result.success(null));
+                }
+
+                @Override
+                public void onFailure(int sessionId, int requestId, int errCode) {
+                    Log.e("CAMERA", "startPlayback failed: " + errCode);
+                    mainHandler.post(() -> result.error("START_PLAYBACK_FAILED", "Error code: " + errCode, null));
+                }
+            },
+            new OperationDelegateCallBack() {
+                @Override
+                public void onSuccess(int sessionId, int requestId, String data) {
+                    Log.i("CAMERA", "playback finished: " + data);
+                }
+
+                @Override
+                public void onFailure(int sessionId, int requestId, int errCode) {
+                    Log.e("CAMERA", "playback finish callback failed: " + errCode);
+                }
+            }
+        );
+    }
+
+    // 停止回放
+    public void stopPlayback(String stopDevId, MethodChannel.Result result) {
+        if (mCameraP2P == null) {
+            Log.w("CAMERA", "stopPlayback: mCameraP2P is null");
+            result.error("CAMERA_P2P_NULL", "Camera P2P instance is null", null);
+            return;
+        }
+        
+        mCameraP2P.stopPlayBack(new OperationDelegateCallBack() {
+            @Override
+            public void onSuccess(int sessionId, int requestId, String data) {
+                Log.i("CAMERA", "stopPlayback success: " + data);
+                mainHandler.post(() -> result.success(null));
+            }
+
+            @Override
+            public void onFailure(int sessionId, int requestId, int errCode) {
+                Log.e("CAMERA", "stopPlayback failed: " + errCode);
+                mainHandler.post(() -> result.error("STOP_PLAYBACK_FAILED", "Error code: " + errCode, null));
+            }
+        });
     }
 
     public void snapshot(String dirPath, MethodChannel.Result result) {

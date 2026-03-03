@@ -94,11 +94,11 @@ dependencies {
     implementation 'com.thingclips.smart:thingsmart-ipcsdk:6.4.2'
     // Example BizBundle: Device Activator（摄像头配网用）
     implementation "com.thingclips.smart:thingsmart-bizbundle-device_activator"
-    implementation "com.alibaba:fastjson:1.1.67.android"
+    implementation "com.alibaba:fastjson:1.2.83"
     implementation "com.squareup.okhttp3:okhttp-urlconnection:3.14.9"
 
     // SoLoader (required by Tuya SDK)
-    implementation "com.facebook.soloader:soloader:0.10.4+"
+    implementation "com.facebook.soloader:soloader:0.11.0"
 
     // Unit test dependencies
     testImplementation "junit:junit:4.13.2"

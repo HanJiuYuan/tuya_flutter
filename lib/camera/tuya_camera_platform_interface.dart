@@ -71,6 +71,12 @@ abstract class TuyaCameraPlatform extends PlatformInterface {
   /// 停止预览
   Future<void> stopPreview();
 
+  /// 设置实时预览清晰度（2=标清，4=高清）
+  Future<void> setDefinition({required int definition});
+
+  /// 获取当前实时预览清晰度
+  Future<int> getDefinition();
+
   /// 开始对讲
   Future<void> startTalk();
 
@@ -93,4 +99,63 @@ abstract class TuyaCameraPlatform extends PlatformInterface {
 
   /// 切换扬声器/听筒播放（true=扬声器，false=听筒）
   Future<void> setLoudSpeakerStatus({required bool enable});
+
+  /// 查询某年某月有录像的日期列表
+  Future<List<int>> queryRecordDaysByMonth({
+    required String deviceId,
+    required int year,
+    required int month,
+  });
+
+  /// 查询某天的视频片段时间信息
+  Future<List<Map<String, dynamic>>> queryRecordTimeSliceByDay({
+    required String deviceId,
+    required int year,
+    required int month,
+    required int day,
+  });
+
+  /// 开始回放
+  Future<void> startPlayback({
+    required String deviceId,
+    required int startTime,
+    required int endTime,
+    required int playTime,
+  });
+
+  /// 停止回放
+  Future<void> stopPlayback({required String deviceId});
+
+  /// 获取摄像头报警消息列表（含附件图片/视频）
+  Future<List<Map<String, dynamic>>> getCameraMessages({
+    required String deviceId,
+    int offset = 0,
+    int limit = 20,
+    List<String>? msgCodes,
+  });
+
+  /// 创建视频消息播放器并创建云设备
+  Future<void> createCloudVideoPlayer({required String deviceId});
+
+  /// 播放报警消息中的云视频
+  Future<void> playCloudVideo({
+    required String videoUrl,
+    required int startTime,
+    required String encryptKey,
+  });
+
+  /// 暂停云视频播放
+  Future<void> pauseCloudVideo();
+
+  /// 恢复云视频播放
+  Future<void> resumeCloudVideo();
+
+  /// 停止云视频播放
+  Future<void> stopCloudVideo();
+
+  /// 销毁云视频播放器
+  Future<void> destroyCloudVideo();
+
+  /// 设置云视频静音
+  Future<void> setCloudVideoMute({required int mute});
 }

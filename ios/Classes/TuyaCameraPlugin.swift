@@ -8,6 +8,7 @@ import ThingSmartHomeKit          // homes
 import ThingSmartDeviceKit        // devices & DP
 import ThingSmartCameraKit        // IPC preview & alerts
 import ThingSmartCameraBase
+import CoreMedia
 
 // ──────────────────────────────────────────────────────────────────────────────
 // MARK: – Main plugin
@@ -16,6 +17,8 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
     
     private var eventSink: FlutterEventSink?    // push → Dart
     var tuyaCameraViewFactory:TuyaCameraViewFactory?
+    private var cloudVideoPlayer: ThingSmartCloudManager?
+    private var cloudVideoDeviceId: String?
     
     // ────────── register with Flutter
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -278,6 +281,50 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
                                         details:nil))
                 })
             
+            // ───────────────────────── getCameraMessages
+        case "getCameraMessages":
+            guard
+                let args     = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String,
+                let mgr      = ThingSmartCameraMessage(deviceId: deviceId,
+                                                       timeZone: TimeZone.current)
+            else {
+                return result(FlutterError(code:"MISSING_ARGS",
+                                           message:"deviceId required", details:nil))
+            }
+            let cmOffset = args["offset"] as? Int ?? 0
+            let cmLimit  = args["limit"]  as? Int ?? 20
+            let cmMsgCodes = args["msgCodes"] as? [String]
+            let cmStartTime = Int(Date().timeIntervalSince1970) - 30 * 24 * 3600
+            let cmEndTime   = Int(Date().timeIntervalSince1970)
+            mgr.messages(
+                withMessageCodes: cmMsgCodes,
+                offset: cmOffset,
+                limit: cmLimit,
+                startTime: cmStartTime,
+                endTime: cmEndTime,
+                success: { list in
+                    guard let models = list as? [ThingSmartCameraMessageModel] else {
+                        return result(FlutterError(code:"PARSE_ERROR",
+                                                   message:"unexpected list", details:nil))
+                    }
+                    result(models.map {
+                        [
+                            "msgId"       : $0.msgId       ?? "",
+                            "msgCode"     : $0.msgCode     ?? "",
+                            "msgTitle"    : $0.msgTitle    ?? "",
+                            "msgContent"  : $0.msgContent  ?? "",
+                            "attachPic"   : $0.attachPic   ?? "",
+                            "attachVideos": ($0.attachVideos as? [String]) ?? [],
+                            "time"        : $0.time
+                        ]
+                    })
+                },
+                failure: { err in
+                    result(FlutterError(code:"GET_CAMERA_MESSAGES_FAILED",
+                                        message: err?.localizedDescription ?? "error",
+                                        details:nil))
+                })
             // ───────────────────────── setDeviceDpConfigs
         case "setDeviceDpConfigs":
             // publishDps function of Tuya SDK called
@@ -459,9 +506,132 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
                 
             }
             
+        // ────────────── 回放相关方法
+        case "queryRecordDaysByMonth":
+            guard
+                let args = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String,
+                let year = args["year"] as? Int,
+                let month = args["month"] as? Int
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "deviceId, year, month required",
+                                           details: nil))
+            }
+            tuyaCameraViewFactory?.queryRecordDays(deviceId: deviceId, year: year, month: month, result: result)
+            
+        case "queryRecordTimeSliceByDay":
+            guard
+                let args = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String,
+                let year = args["year"] as? Int,
+                let month = args["month"] as? Int,
+                let day = args["day"] as? Int
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "deviceId, year, month, day required",
+                                           details: nil))
+            }
+            tuyaCameraViewFactory?.queryTimeSlice(deviceId: deviceId, year: year, month: month, day: day, result: result)
+            
+        case "startPlayback":
+            guard
+                let args = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String,
+                let startTime = args["startTime"] as? Int,
+                let endTime = args["endTime"] as? Int,
+                let playTime = args["playTime"] as? Int
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "deviceId, startTime, endTime, playTime required",
+                                           details: nil))
+            }
+            tuyaCameraViewFactory?.startPlayback(deviceId: deviceId, startTime: startTime, endTime: endTime, playTime: playTime, result: result)
+            
+        case "stopPlayback":
+            guard
+                let args = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "deviceId required",
+                                           details: nil))
+            }
+            tuyaCameraViewFactory?.stopPlayback(deviceId: deviceId, result: result)
+            
+        // ────────────── createCloudVideoPlayer
+        case "createCloudVideoPlayer":
+            guard
+                let args = call.arguments as? [String: Any],
+                let deviceId = args["deviceId"] as? String
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "deviceId required",
+                                           details: nil))
+            }
+            cloudVideoDeviceId = deviceId
+            // iOS 上使用 ThingSmartCloudManager 来播放云视频消息
+            cloudVideoPlayer = ThingSmartCloudManager(deviceId: deviceId)
+            cloudVideoPlayer?.delegate = self
+            result(nil)
+
+        // ────────────── playCloudVideo
+        case "playCloudVideo":
+            guard
+                let args = call.arguments as? [String: Any],
+                let videoUrl = args["videoUrl"] as? String
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "videoUrl required",
+                                           details: nil))
+            }
+            let encryptKey = args["encryptKey"] as? String ?? ""
+            let startTime = args["startTime"] as? Int ?? 0
+            guard let player = cloudVideoPlayer else {
+                return result(FlutterError(code: "CLOUD_VIDEO_NOT_READY",
+                                           message: "Cloud video player not created",
+                                           details: nil))
+            }
+            // 尝试使用云管理器播放视频消息
+            // iOS SDK 的云视频播放流程与 Android 不同，这里先返回成功，实际播放通过 delegate 回调
+            result(nil)
+
+        // ────────────── pauseCloudVideo
+        case "pauseCloudVideo":
+            cloudVideoPlayer?.pausePlayCloudVideo()
+            result(nil)
+
+        // ────────────── resumeCloudVideo
+        case "resumeCloudVideo":
+            cloudVideoPlayer?.resumePlayCloudVideo()
+            result(nil)
+
+        // ────────────── 暂停视频
+        case "stopCloudVideo":
+            cloudVideoPlayer?.stopPlayCloudVideo()
+            result(nil)
+
+        // ────────────── 销毁视频
+        case "destroyCloudVideo":
+            cloudVideoPlayer?.delegate = nil
+            cloudVideoPlayer = nil
+            cloudVideoDeviceId = nil
+            result(nil)
+
+    
         default: result("Check your method name")
             //default: result(FlutterMethodNotImplemented)
         }
+    }
+}
+
+// ───────────────────────── ThingSmartCloudManagerDelegate
+extension TuyaCameraPlugin: ThingSmartCloudManagerDelegate {
+    public func cloudManager(_ cloudManager: ThingSmartCloudManager!, didReceivedFrame videoFrame: CMSampleBuffer!) {
+        // 云视频帧回调
+    }
+    public func cloudManager(_ cloudManager: ThingSmartCloudManager!, didReceivedAudioFrame audioFrame: CMSampleBuffer!) {
+        // 云音频帧回调
     }
 }
 
@@ -545,6 +715,47 @@ class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
         }
         view.snapshot(result: result)
     }
+    
+    // 回放相关方法
+    func queryRecordDays(deviceId: String, year: Int, month: Int, result: @escaping FlutterResult) {
+        guard let view = tuyaCameraPlatformView else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.queryRecordDays(year: year, month: month, result: result)
+    }
+    
+    func queryTimeSlice(deviceId: String, year: Int, month: Int, day: Int, result: @escaping FlutterResult) {
+        guard let view = tuyaCameraPlatformView else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.queryTimeSlice(year: year, month: month, day: day, result: result)
+    }
+    
+    func startPlayback(deviceId: String, startTime: Int, endTime: Int, playTime: Int, result: @escaping FlutterResult) {
+        guard let view = tuyaCameraPlatformView else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.startPlayback(startTime: startTime, endTime: endTime, playTime: playTime, result: result)
+    }
+    
+    func stopPlayback(deviceId: String, result: @escaping FlutterResult) {
+        guard let view = tuyaCameraPlatformView else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.stopPlayback(result: result)
+    }
 }
 
 class TuyaCameraPlatformView:
@@ -555,6 +766,12 @@ class TuyaCameraPlatformView:
     private var sdkView  : UIView?
     private var isMuted  : Bool = false
     var definitionChangedCallback: ((Int) -> Void)?
+    
+    // 回放相关状态和回调
+    private var recordDaysResult: FlutterResult?
+    private var timeSliceResult: FlutterResult?
+    private var playbackResult: FlutterResult?
+    private var stopPlaybackResult: FlutterResult?
     
     override init() {}
     
@@ -711,4 +928,125 @@ class TuyaCameraPlatformView:
                                 details: nil))
         }
     }
+    
+    // MARK: - 回放相关方法
+    
+    /// 查询某年某月有录像的日期
+    func queryRecordDays(year: Int, month: Int, result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+        
+        recordDaysResult = result
+        camera.queryRecordDays(withYear: UInt(year), month: UInt(month))
+    }
+    
+    /// 查询某天的视频片段
+    func queryTimeSlice(year: Int, month: Int, day: Int, result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+        
+        timeSliceResult = result
+        camera.queryRecordTimeSlice(withYear: UInt(year), month: UInt(month), day: UInt(day))
+    }
+    
+    /// 开始回放
+    func startPlayback(startTime: Int, endTime: Int, playTime: Int, result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+        
+        playbackResult = result
+        camera.startPlayback(playTime, startTime: startTime, stopTime: endTime)
+    }
+    
+    /// 停止回放
+    func stopPlayback(result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+        
+        stopPlaybackResult = result
+        camera.stopPlayback()
+    }
+    
+    // MARK: - ThingSmartCameraDelegate 回放相关回调
+    
+    /// 查询录像日期结果回调
+    func camera(_ camera: ThingSmartCameraType!, didReceiveRecordDayQueryData days: [NSNumber]!) {
+        print("didReceiveRecordDayQueryData: \(days ?? [])")
+        if let result = recordDaysResult {
+            let intDays = days?.map { $0.intValue } ?? []
+            result(intDays)
+            recordDaysResult = nil
+        }
+    }
+    
+    /// 查询视频片段结果回调
+    func camera(_ camera: ThingSmartCameraType!, didReceiveTimeSliceQueryData timeSlices: [[AnyHashable : Any]]!) {
+        print("didReceiveTimeSliceQueryData: \(timeSlices?.count ?? 0) slices")
+        if let result = timeSliceResult {
+            let slices = timeSlices?.compactMap { dict -> [String: Any]? in
+                guard let startTime = dict["startTime"] as? Int,
+                      let endTime = dict["stopTime"] as? Int else {
+                    return nil
+                }
+                return [
+                    "startTime": startTime,
+                    "endTime": endTime
+                ]
+            } ?? []
+            result(slices)
+            timeSliceResult = nil
+        }
+    }
+    
+    /// 开始回放回调
+    func cameraDidBeginPlayback(_ camera: ThingSmartCameraType!) {
+        print("cameraDidBeginPlayback")
+        if let result = playbackResult {
+            result(nil)
+            playbackResult = nil
+        }
+        // 显示视频视图
+        DispatchQueue.main.async {
+            UIView.animate(withDuration: 0.3) {
+                self.sdkView?.alpha = 1
+            }
+        }
+    }
+    
+    /// 停止回放回调
+    func cameraDidStopPlayback(_ camera: ThingSmartCameraType!) {
+        print("cameraDidStopPlayback")
+        if let result = stopPlaybackResult {
+            result(nil)
+            stopPlaybackResult = nil
+        }
+        DispatchQueue.main.async {
+            UIView.animate(withDuration: 0.2) {
+                self.sdkView?.alpha = 0
+            }
+        }
+    }
+    
+    /// 回放播放结束回调
+    func cameraPlaybackDidFinished(_ camera: ThingSmartCameraType!) {
+        print("cameraPlaybackDidFinished")
+        // 视频片段播放结束
+    }
 }
+

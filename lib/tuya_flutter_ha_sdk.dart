@@ -588,7 +588,7 @@ class TuyaFlutterHaSdk {
   /// Map<String,dynamic>> deviceInfo = await discoverDeviceInfo();
   /// ```
   ///
-  /// Returns its raw JSON map, or null if none found.
+  /// Returns its raw JSON map, or null if none found.  
   ///
   /// Throws [PlatformException] on failure.
   static Future<Map<String, dynamic>?> discoverDeviceInfo() {
@@ -1390,6 +1390,18 @@ class TuyaFlutterHaSdk {
     return TuyaCameraMethods.stopPreview();
   }
 
+  /// 设置实时预览清晰度
+  ///
+  /// [definition]: 2=标清，4=高清
+  static Future<void> setDefinition({required int definition}) {
+    return TuyaCameraMethods.setDefinition(definition: definition);
+  }
+
+  /// 获取当前实时预览清晰度
+  static Future<int> getDefinition() {
+    return TuyaCameraMethods.getDefinition();
+  }
+
   /// 开始对讲
   ///
   /// Example Usage:
@@ -1742,5 +1754,217 @@ class TuyaFlutterHaSdk {
       devId: devId,
       dps: dps,
     );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Camera Playback API
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  /// Query which days in a month have recorded videos
+  ///
+  /// Example Usage:
+  /// ```dart
+  /// List<int> days = await queryRecordDaysByMonth(
+  ///   deviceId: "camera123",
+  ///   year: 2024,
+  ///   month: 2,
+  /// );
+  /// ```
+  ///
+  /// Inputs:
+  /// - 'deviceId': The device ID of the camera
+  /// - 'year': The year to query (e.g., 2024)
+  /// - 'month': The month to query (1-12)
+  ///
+  /// Returns a list of day numbers that have recordings
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<int>> queryRecordDaysByMonth({
+    required String deviceId,
+    required int year,
+    required int month,
+  }) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.queryRecordDaysByMonth(
+      deviceId: deviceId,
+      year: year,
+      month: month,
+    );
+  }
+
+  /// Query video time slices for a specific day
+  ///
+  /// Example Usage:
+  /// ```dart
+  /// List<Map<String, dynamic>> slices = await queryRecordTimeSliceByDay(
+  ///   deviceId: "camera123",
+  ///   year: 2024,
+  ///   month: 2,
+  ///   day: 15,
+  /// );
+  /// ```
+  ///
+  /// Inputs:
+  /// - 'deviceId': The device ID of the camera
+  /// - 'year': The year to query (e.g., 2024)
+  /// - 'month': The month to query (1-12)
+  /// - 'day': The day to query (1-31)
+  ///
+  /// Returns a list of time slice objects with startTime and endTime
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<Map<String, dynamic>>> queryRecordTimeSliceByDay({
+    required String deviceId,
+    required int year,
+    required int month,
+    required int day,
+  }) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.queryRecordTimeSliceByDay(
+      deviceId: deviceId,
+      year: year,
+      month: month,
+      day: day,
+    );
+  }
+
+  /// Start playback of a recorded video
+  ///
+  /// Example Usage:
+  /// ```dart
+  /// await startPlayback(
+  ///   deviceId: "camera123",
+  ///   startTime: 1620000000,
+  ///   endTime: 1620003600,
+  ///   playTime: 1620000000,
+  /// );
+  /// ```
+  ///
+  /// Inputs:
+  /// - 'deviceId': The device ID of the camera
+  /// - 'startTime': Unix timestamp of the video segment start
+  /// - 'endTime': Unix timestamp of the video segment end
+  /// - 'playTime': Unix timestamp where to start playing from
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> startPlayback({
+    required String deviceId,
+    required int startTime,
+    required int endTime,
+    required int playTime,
+  }) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.startPlayback(
+      deviceId: deviceId,
+      startTime: startTime,
+      endTime: endTime,
+      playTime: playTime,
+    );
+  }
+
+  /// Stop playback of a recorded video
+  ///
+  /// Example Usage:
+  /// ```dart
+  /// await stopPlayback(deviceId: "camera123");
+  /// ```
+  ///
+  /// Inputs:
+  /// - 'deviceId': The device ID of the camera
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> stopPlayback({required String deviceId}) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.stopPlayback(deviceId: deviceId);
+  }
+
+  /// Get camera alarm/detection messages (with attachPic and attachVideos)
+  static Future<List<Map<String, dynamic>>> getCameraMessages({
+    required String deviceId,
+    int offset = 0,
+    int limit = 20,
+    List<String>? msgCodes,
+  }) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.getCameraMessages(
+      deviceId: deviceId,
+      offset: offset,
+      limit: limit,
+      msgCodes: msgCodes,
+    );
+  }
+
+  /// Create a cloud video message player for the given device
+  static Future<void> createCloudVideoPlayer({required String deviceId}) {
+    if (deviceId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "deviceId should be specified",
+      );
+    }
+    return TuyaCameraMethods.createCloudVideoPlayer(deviceId: deviceId);
+  }
+
+  /// Play a cloud video from an alarm message
+  static Future<void> playCloudVideo({
+    required String videoUrl,
+    int startTime = 0,
+    String encryptKey = '',
+  }) {
+    return TuyaCameraMethods.playCloudVideo(
+      videoUrl: videoUrl,
+      startTime: startTime,
+      encryptKey: encryptKey,
+    );
+  }
+
+  /// Pause cloud video playback
+  static Future<void> pauseCloudVideo() {
+    return TuyaCameraMethods.pauseCloudVideo();
+  }
+
+  /// Resume cloud video playback
+  static Future<void> resumeCloudVideo() {
+    return TuyaCameraMethods.resumeCloudVideo();
+  }
+
+  /// Stop cloud video playback
+  static Future<void> stopCloudVideo() {
+    return TuyaCameraMethods.stopCloudVideo();
+  }
+
+  /// Destroy cloud video player
+  static Future<void> destroyCloudVideo() {
+    return TuyaCameraMethods.destroyCloudVideo();
+  }
+
+  /// Set cloud video mute (0=unmute, 1=mute)
+  static Future<void> setCloudVideoMute({required int mute}) {
+    return TuyaCameraMethods.setCloudVideoMute(mute: mute);
   }
 }

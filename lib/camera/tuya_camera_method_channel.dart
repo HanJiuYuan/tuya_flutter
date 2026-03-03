@@ -161,6 +161,22 @@ class TuyaCameraMethodChannel extends TuyaCameraPlatform {
     await _channel.invokeMethod('stopPreview');
   }
 
+  /// 设置实时预览清晰度
+  @override
+  Future<void> setDefinition({required int definition}) async {
+    await _channel.invokeMethod('setDefinition', {'definition': definition});
+  }
+
+  /// 获取实时预览清晰度
+  @override
+  Future<int> getDefinition() async {
+    final result = await _channel.invokeMethod('getDefinition');
+    if (result is int) {
+      return result;
+    }
+    return 2;
+  }
+
   /// 开始对讲
   /// startTalk function of native is invoked
   @override
@@ -215,5 +231,132 @@ class TuyaCameraMethodChannel extends TuyaCameraPlatform {
   @override
   Future<void> setLoudSpeakerStatus({required bool enable}) async {
     await _channel.invokeMethod('setLoudSpeakerStatus', {'enable': enable});
+  }
+
+  /// 查询某年某月有录像的日期列表
+  /// queryRecordDaysByMonth function of native is invoked
+  @override
+  Future<List<int>> queryRecordDaysByMonth({
+    required String deviceId,
+    required int year,
+    required int month,
+  }) async {
+    final List<dynamic> result = await _channel.invokeMethod(
+      'queryRecordDaysByMonth',
+      {'deviceId': deviceId, 'year': year, 'month': month},
+    );
+    return result.cast<int>();
+  }
+
+  /// 查询某天的视频片段时间信息
+  /// queryRecordTimeSliceByDay function of native is invoked
+  @override
+  Future<List<Map<String, dynamic>>> queryRecordTimeSliceByDay({
+    required String deviceId,
+    required int year,
+    required int month,
+    required int day,
+  }) async {
+    final List<dynamic> result = await _channel.invokeMethod(
+      'queryRecordTimeSliceByDay',
+      {'deviceId': deviceId, 'year': year, 'month': month, 'day': day},
+    );
+    return result.cast<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// 开始回放
+  /// startPlayback function of native is invoked
+  @override
+  Future<void> startPlayback({
+    required String deviceId,
+    required int startTime,
+    required int endTime,
+    required int playTime,
+  }) async {
+    await _channel.invokeMethod('startPlayback', {
+      'deviceId': deviceId,
+      'startTime': startTime,
+      'endTime': endTime,
+      'playTime': playTime,
+    });
+  }
+
+  /// 停止回放
+  /// stopPlayback function of native is invoked
+  @override
+  Future<void> stopPlayback({required String deviceId}) async {
+    await _channel.invokeMethod('stopPlayback', {'deviceId': deviceId});
+  }
+
+  /// 获取摄像头报警消息列表（含附件图片/视频）
+  @override
+  Future<List<Map<String, dynamic>>> getCameraMessages({
+    required String deviceId,
+    int offset = 0,
+    int limit = 20,
+    List<String>? msgCodes,
+  }) async {
+    final List<dynamic> result = await _channel.invokeMethod(
+      'getCameraMessages',
+      {
+        'deviceId': deviceId,
+        'offset': offset,
+        'limit': limit,
+        'msgCodes': msgCodes,
+      },
+    );
+    return result.cast<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// 创建视频消息播放器并创建云设备
+  @override
+  Future<void> createCloudVideoPlayer({required String deviceId}) async {
+    await _channel.invokeMethod('createCloudVideoPlayer', {
+      'deviceId': deviceId,
+    });
+  }
+
+  /// 播放报警消息中的云视频
+  @override
+  Future<void> playCloudVideo({
+    required String videoUrl,
+    required int startTime,
+    required String encryptKey,
+  }) async {
+    await _channel.invokeMethod('playCloudVideo', {
+      'videoUrl': videoUrl,
+      'startTime': startTime,
+      'encryptKey': encryptKey,
+    });
+  }
+
+  /// 暂停云视频播放
+  @override
+  Future<void> pauseCloudVideo() async {
+    await _channel.invokeMethod('pauseCloudVideo');
+  }
+
+  /// 恢复云视频播放
+  @override
+  Future<void> resumeCloudVideo() async {
+    await _channel.invokeMethod('resumeCloudVideo');
+  }
+
+  /// 停止云视频播放
+  @override
+  Future<void> stopCloudVideo() async {
+    await _channel.invokeMethod('stopCloudVideo');
+  }
+
+  /// 销毁云视频播放器
+  @override
+  Future<void> destroyCloudVideo() async {
+    await _channel.invokeMethod('destroyCloudVideo');
+  }
+
+  /// 设置云视频静音
+  @override
+  Future<void> setCloudVideoMute({required int mute}) async {
+    await _channel.invokeMethod('setCloudVideoMute', {'mute': mute});
   }
 }
