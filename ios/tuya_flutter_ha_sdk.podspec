@@ -47,6 +47,7 @@ This plugin exposes Tuya’s user‒ and device‒management SDKs via MethodChan
   s.dependency 'ThingSmartActivatorBizBundle',       '~> 6.2.0'
   s.dependency 'ThingSmartFamilyBizBundle',          '~> 6.2.0'
   s.dependency 'ThingSmartDeviceKit',                '~> 5.10.3'
+  s.dependency 'ThingSmartBusinessExtensionKit'
 
   # ──────────────────────────────────────────────────────────────────────────────
   # NOTE: We have REMOVED the local Cryption dependency here.

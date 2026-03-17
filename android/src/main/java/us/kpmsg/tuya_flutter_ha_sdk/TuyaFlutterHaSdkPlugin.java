@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.wifi.SupplicantState;
 import android.app.Activity;
+import android.os.Build;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -54,6 +55,9 @@ import com.thingclips.smart.sdk.api.WifiSignalListener;
 import com.thingclips.smart.home.sdk.callback.IThingRoomResultCallback;
 import com.thingclips.smart.home.sdk.bean.RoomBean;
 import com.thingclips.smart.home.sdk.callback.IThingGetRoomListCallback;
+import com.thingclips.smart.sdk.api.IThingDataCallback;
+
+import com.alibaba.fastjson.JSON;
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.MethodCall;
@@ -72,6 +76,11 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
+import java.lang.reflect.Method;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import android.util.Base64;
 
 import android.util.Log;
 
@@ -88,16 +97,162 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     private EventChannel eventChannel;
     private EventSink eventSink;
 
+    private Object wifiBackupManager;
+    private String wifiBackupDevId;
+    private Object wifiSwitchManager;
+    private String wifiSwitchDevId;
+
     private TuyaCameraPlugin tuyaCameraPlugin;
 
     private IBleActivator mBleActivator;
 
     private IMultiModeActivator mComboActivator;
 
-
     private String mBleActivatorUuid;
 
     private String mComboActivatorUuid;
+
+    private static String sha256Base64(String input) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+        return Base64.encodeToString(hash, Base64.NO_WRAP);
+    }
+
+    private Map<String, Object> getLocalWifiInfo() {
+        try {
+            if (appContext == null) return null;
+            WifiManager wifiManager = (WifiManager) appContext.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifiManager == null) return null;
+            WifiInfo wifiInfo = wifiManager.getConnectionInfo();
+            if (wifiInfo == null) return null;
+
+            HashMap<String, Object> map = new HashMap<>();
+            String ssid = wifiInfo.getSSID();
+            if (ssid != null) {
+                if (ssid.startsWith("\"") && ssid.endsWith("\"") && ssid.length() >= 2) {
+                    ssid = ssid.substring(1, ssid.length() - 1);
+                }
+                map.put("ssid", ssid);
+            }
+            map.put("bssid", wifiInfo.getBSSID());
+            map.put("rssi", wifiInfo.getRssi());
+            map.put("ipAddress", wifiInfo.getIpAddress());
+            map.put("linkSpeed", wifiInfo.getLinkSpeed());
+            map.put("networkId", wifiInfo.getNetworkId());
+            SupplicantState state = wifiInfo.getSupplicantState();
+            if (state != null) {
+                map.put("supplicantState", state.toString());
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                map.put("frequency", wifiInfo.getFrequency());
+            }
+            return map;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private Object ensureWifiBackupManager(String devId) {
+        if (wifiBackupManager == null || wifiBackupDevId == null || !wifiBackupDevId.equals(devId)) {
+            try {
+                if (wifiBackupManager != null) {
+                    wifiBackupManager.getClass().getMethod("onDestory").invoke(wifiBackupManager);
+                }
+            } catch (Throwable ignore) {
+            }
+            try {
+                wifiBackupManager = ThingHomeSdk.class
+                        .getMethod("getWifiBackupManager", String.class)
+                        .invoke(null, devId);
+            } catch (Throwable t) {
+                wifiBackupManager = null;
+            }
+            if (wifiBackupManager == null) {
+                try {
+                    Class<?> tuyaHomeSdkClazz = Class.forName("com.tuya.smart.home.sdk.TuyaHomeSdk");
+                    wifiBackupManager = tuyaHomeSdkClazz
+                            .getMethod("getWifiBackupManager", String.class)
+                            .invoke(null, devId);
+                } catch (Throwable ignore) {
+                    wifiBackupManager = null;
+                }
+            }
+            wifiBackupDevId = devId;
+        }
+        return wifiBackupManager;
+    }
+
+    private Object ensureWifiSwitchManager(String devId) {
+        if (wifiSwitchManager == null || wifiSwitchDevId == null || !wifiSwitchDevId.equals(devId)) {
+            try {
+                if (wifiSwitchManager != null) {
+                    wifiSwitchManager.getClass().getMethod("onDestory").invoke(wifiSwitchManager);
+                }
+            } catch (Throwable ignore) {
+            }
+            try {
+                wifiSwitchManager = ThingHomeSdk.class
+                        .getMethod("getWifiSwitchManager", String.class)
+                        .invoke(null, devId);
+            } catch (Throwable t) {
+                wifiSwitchManager = null;
+            }
+            wifiSwitchDevId = devId;
+        }
+        return wifiSwitchManager;
+    }
+
+    private Object ensureThingDevice(String devId) {
+        try {
+            Object device = ThingHomeSdk.newDeviceInstance(devId);
+            if (device != null) return device;
+        } catch (Throwable ignore) {
+        }
+        try {
+            Class<?> tuyaHomeSdkClazz = Class.forName("com.tuya.smart.home.sdk.TuyaHomeSdk");
+            return tuyaHomeSdkClazz.getMethod("newDeviceInstance", String.class).invoke(null, devId);
+        } catch (Throwable ignore) {
+        }
+        return null;
+    }
+
+    private Method findMethodByName(Object target, String methodName) {
+        if (target == null || methodName == null) return null;
+        for (Method m : target.getClass().getMethods()) {
+            if (methodName.equals(m.getName())) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    private Method findMethodByNameAndArgCount(Object target, String methodName, int argCount) {
+        if (target == null || methodName == null) return null;
+        for (Method m : target.getClass().getMethods()) {
+            if (methodName.equals(m.getName()) && m.getParameterTypes().length == argCount) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    private Map<String, Object> toMap(Object data) {
+        try {
+            if (data == null) return null;
+            return JSON.parseObject(JSON.toJSONString(data));
+        } catch (Throwable ignore) {
+        }
+        return null;
+    }
+
+    private Object toJsonObject(Object data) {
+        try {
+            if (data == null) return null;
+            return JSON.parse(JSON.toJSONString(data));
+        } catch (Throwable ignore) {
+        }
+        return data;
+    }
 
 
     /**
@@ -471,6 +626,673 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     }
                 });
                 break;
+
+            case "isSupportBackupNetwork": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                DeviceBean dev = ThingHomeSdk.getDataInstance().getDeviceBean(devId);
+                if (dev == null) {
+                    result.error("DEVICE_NOT_FOUND", "DeviceBean is null", null);
+                    break;
+                }
+                long attr = 0L;
+                try {
+                    attr = dev.getDevAttribute();
+                } catch (Throwable t) {
+                    result.error("GET_ATTRIBUTE_FAILED", t.getMessage(), null);
+                    break;
+                }
+                boolean supported = (attr & (1L << 12)) != 0L;
+                result.success(supported);
+                break;
+            }
+
+            case "getCurrentWifiInfo": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object mgr = ensureWifiBackupManager(devId);
+                if (mgr == null) {
+                    Map<String, Object> local = getLocalWifiInfo();
+                    if (local != null) {
+                        result.success(local);
+                        break;
+                    }
+                    result.error("NOT_SUPPORTED", "WifiBackupManager not available in current SDK", null);
+                    break;
+                }
+                final boolean[] resultCalled = {false};
+                try {
+                    mgr.getClass().getMethod("getCurrentWifiInfo", IThingDataCallback.class)
+                            .invoke(mgr, new IThingDataCallback<Object>() {
+                    @Override
+                    public void onSuccess(Object res) {
+                        synchronized (resultCalled) {
+                            if (resultCalled[0]) return;
+                            resultCalled[0] = true;
+                        }
+                        try {
+                            Map<String, Object> map = JSON.parseObject(JSON.toJSONString(res));
+                            result.success(map);
+                        } catch (Throwable t) {
+                            result.error("PARSE_FAILED", t.getMessage(), null);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        synchronized (resultCalled) {
+                            if (resultCalled[0]) return;
+                            resultCalled[0] = true;
+                        }
+                        boolean mqttNotConnected = false;
+                        try {
+                            mqttNotConnected = "6000".equals(errorCode)
+                                    || (errorMessage != null && errorMessage.toLowerCase().contains("mqtt"));
+                        } catch (Throwable ignore) {
+                        }
+                        if (mqttNotConnected) {
+                            Map<String, Object> local = getLocalWifiInfo();
+                            if (local != null) {
+                                result.success(local);
+                            } else {
+                                result.success(null);
+                            }
+                            return;
+                        }
+                        result.error(errorCode, errorMessage, null);
+                    }
+                });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "getBackupWifiList": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object mgr = ensureWifiBackupManager(devId);
+                if (mgr == null) {
+                    result.error("NOT_SUPPORTED", "WifiBackupManager not available in current SDK", null);
+                    break;
+                }
+                try {
+                    mgr.getClass().getMethod("getBackupWifiList", IThingDataCallback.class)
+                            .invoke(mgr, new IThingDataCallback<Object>() {
+                    @Override
+                    public void onSuccess(Object res) {
+                        try {
+                            Map<String, Object> map = JSON.parseObject(JSON.toJSONString(res));
+                            result.success(map);
+                        } catch (Throwable t) {
+                            result.error("PARSE_FAILED", t.getMessage(), null);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        result.error(errorCode, errorMessage, null);
+                    }
+                });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "setBackupWifiList": {
+                String devId = call.argument("devId");
+                List<Map<String, Object>> list = call.argument("backupWifiList");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                if (list == null) {
+                    result.error("MISSING_ARGS", "backupWifiList is required", null);
+                    break;
+                }
+
+                Object mgr = ensureWifiBackupManager(devId);
+                if (mgr == null) {
+                    result.error("NOT_SUPPORTED", "WifiBackupManager not available in current SDK", null);
+                    break;
+                }
+
+                try {
+                    Class<?> beanClazz = null;
+                    String[] beanCandidates = {
+                        "com.thingclips.smart.sdk.api.wifibackup.api.bean.BackupWifiBean",
+                        "com.thingclips.smart.home.sdk.bean.wifibackup.BackupWifiBean",
+                        "com.tuya.smart.home.sdk.bean.wifibackup.BackupWifiBean",
+                    };
+                    for (String candidate : beanCandidates) {
+                        try {
+                            beanClazz = Class.forName(candidate);
+                            break;
+                        } catch (Throwable ignore) {
+                        }
+                    }
+
+                    Object payload = list;
+                    if (beanClazz != null) {
+                        ArrayList<Object> beans = new ArrayList<>();
+                        for (Map<String, Object> item : list) {
+                            if (item == null) continue;
+                            Object b = beanClazz.getDeclaredConstructor().newInstance();
+                            Object ssid = item.get("ssid");
+                            Object passwd = item.get("passwd");
+                            Object hash = item.get("hash");
+                            try {
+                                if (ssid != null) beanClazz.getField("ssid").set(b, String.valueOf(ssid));
+                            } catch (Throwable ignore) {
+                            }
+                            try {
+                                if (passwd != null) beanClazz.getField("passwd").set(b, String.valueOf(passwd));
+                            } catch (Throwable ignore) {
+                            }
+                            try {
+                                if (hash != null) beanClazz.getField("hash").set(b, String.valueOf(hash));
+                            } catch (Throwable ignore) {
+                            }
+                            beans.add(b);
+                        }
+                        payload = beans;
+                    }
+
+                    java.lang.reflect.Method setMethod = null;
+                    for (java.lang.reflect.Method m : mgr.getClass().getMethods()) {
+                        if ("setBackupWifiList".equals(m.getName())) {
+                            setMethod = m;
+                            break;
+                        }
+                    }
+                    if (setMethod == null) {
+                        result.error("NOT_SUPPORTED", "setBackupWifiList method not found in manager", null);
+                        break;
+                    }
+                    final java.lang.reflect.Method finalSetMethod = setMethod;
+                    finalSetMethod.invoke(mgr, payload, new IThingDataCallback<Object>() {
+                    @Override
+                    public void onSuccess(Object res) {
+                        try {
+                            Map<String, Object> map = JSON.parseObject(JSON.toJSONString(res));
+                            result.success(map);
+                        } catch (Throwable t) {
+                            result.error("PARSE_FAILED", t.getMessage(), null);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        result.error(errorCode, errorMessage, null);
+                    }
+                });
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    Throwable cause = ite.getCause() != null ? ite.getCause() : ite;
+                    Log.e("TuyaFlutterHaSdk", "setBackupWifiList InvocationTargetException", cause);
+                    result.error("CALL_FAILED", cause.getClass().getName() + ": " + cause.getMessage(), null);
+                } catch (Throwable t) {
+                    Log.e("TuyaFlutterHaSdk", "setBackupWifiList failed", t);
+                    result.error("CALL_FAILED", t.getClass().getName() + ": " + t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "getBackupWifiHash": {
+                String devId = call.argument("devId");
+                String ssid = call.argument("ssid");
+                String passwordStr = call.argument("password");
+                if (devId == null || devId.isEmpty() || ssid == null || ssid.isEmpty() || passwordStr == null) {
+                    result.error("MISSING_ARGS", "devId, ssid, password are required", null);
+                    break;
+                }
+                DeviceBean dev = ThingHomeSdk.getDataInstance().getDeviceBean(devId);
+                if (dev == null) {
+                    result.error("DEVICE_NOT_FOUND", "DeviceBean is null", null);
+                    break;
+                }
+                try {
+                    String localKey = dev.getLocalKey();
+                    String hash = sha256Base64(localKey + ssid + passwordStr);
+                    result.success(hash);
+                } catch (Throwable t) {
+                    result.error("HASH_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "wifiBackupOnDestroy": {
+                String devId = call.argument("devId");
+                if (devId != null && wifiBackupDevId != null && wifiBackupDevId.equals(devId) && wifiBackupManager != null) {
+                    try {
+                        wifiBackupManager.getClass().getMethod("onDestory").invoke(wifiBackupManager);
+                    } catch (Throwable ignore) {
+                    }
+                    wifiBackupManager = null;
+                    wifiBackupDevId = null;
+                }
+                result.success(null);
+                break;
+            }
+
+            case "switchToNewWifi": {
+                String devId = call.argument("devId");
+                String ssid = call.argument("ssid");
+                String passwordStr = call.argument("password");
+                if (devId == null || devId.isEmpty() || ssid == null || ssid.isEmpty() || passwordStr == null) {
+                    result.error("MISSING_ARGS", "devId, ssid, password are required", null);
+                    break;
+                }
+                Object mgr = ensureWifiSwitchManager(devId);
+                if (mgr == null) {
+                    result.error("NOT_SUPPORTED", "WifiSwitchManager not available in current SDK", null);
+                    break;
+                }
+                try {
+                    mgr.getClass().getMethod("switchToNewWifi", String.class, String.class, IThingDataCallback.class)
+                            .invoke(mgr, ssid, passwordStr, new IThingDataCallback<Object>() {
+                    @Override
+                    public void onSuccess(Object res) {
+                        try {
+                            Map<String, Object> map = JSON.parseObject(JSON.toJSONString(res));
+                            result.success(map);
+                        } catch (Throwable t) {
+                            result.error("PARSE_FAILED", t.getMessage(), null);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        result.error(errorCode, errorMessage, null);
+                    }
+                });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "switchToBackupWifi": {
+                String devId = call.argument("devId");
+                String hash = call.argument("hash");
+                if (devId == null || devId.isEmpty() || hash == null || hash.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId and hash are required", null);
+                    break;
+                }
+                Object mgr = ensureWifiSwitchManager(devId);
+                if (mgr == null) {
+                    result.error("NOT_SUPPORTED", "WifiSwitchManager not available in current SDK", null);
+                    break;
+                }
+                try {
+                    mgr.getClass().getMethod("switchToBackupWifi", String.class, IThingDataCallback.class)
+                            .invoke(mgr, hash, new IThingDataCallback<Object>() {
+                    @Override
+                    public void onSuccess(Object res) {
+                        try {
+                            Map<String, Object> map = JSON.parseObject(JSON.toJSONString(res));
+                            result.success(map);
+                        } catch (Throwable t) {
+                            result.error("PARSE_FAILED", t.getMessage(), null);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorCode, String errorMessage) {
+                        result.error(errorCode, errorMessage, null);
+                    }
+                });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "wifiSwitchOnDestroy": {
+                String devId = call.argument("devId");
+                if (devId != null && wifiSwitchDevId != null && wifiSwitchDevId.equals(devId) && wifiSwitchManager != null) {
+                    try {
+                        wifiSwitchManager.getClass().getMethod("onDestory").invoke(wifiSwitchManager);
+                    } catch (Throwable ignore) {
+                    }
+                    wifiSwitchManager = null;
+                    wifiSwitchDevId = null;
+                }
+                result.success(null);
+                break;
+            }
+
+            case "checkFirmwareUpgrade": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method checkMethod = findMethodByNameAndArgCount(device, "checkFirmwareUpgrade", 1);
+                    if (checkMethod == null) {
+                        checkMethod = findMethodByNameAndArgCount(device, "getFirmwareUpgradeInfo", 1);
+                    }
+                    if (checkMethod == null) {
+                        result.error("NOT_SUPPORTED", "checkFirmwareUpgrade/getFirmwareUpgradeInfo not found", null);
+                        break;
+                    }
+                    checkMethod.invoke(device, new IThingDataCallback<Object>() {
+                        @Override
+                        public void onSuccess(Object data) {
+                            result.success(toJsonObject(data));
+                        }
+
+                        @Override
+                        public void onError(String errorCode, String errorMessage) {
+                            result.error(errorCode, errorMessage, null);
+                        }
+                    });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "getFirmwareUpgradingStatus": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method statusMethod = findMethodByNameAndArgCount(device, "getFirmwareUpgradingStatus", 1);
+                    if (statusMethod == null) {
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradingStatus not found", null);
+                        break;
+                    }
+                    statusMethod.invoke(device, new IThingDataCallback<Object>() {
+                        @Override
+                        public void onSuccess(Object data) {
+                            result.success(toMap(data));
+                        }
+
+                        @Override
+                        public void onError(String errorCode, String errorMessage) {
+                            result.error(errorCode, errorMessage, null);
+                        }
+                    });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "startFirmwareUpgrade": {
+                String devId = call.argument("devId");
+                List<Map<String, Object>> firmwares = call.argument("firmwares");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                if (firmwares == null) {
+                    result.error("MISSING_ARGS", "firmwares is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method startMethod = findMethodByNameAndArgCount(device, "startFirmwareUpgrade", 1);
+                    if (startMethod != null) {
+                        startMethod.invoke(device, firmwares);
+                        result.success(null);
+                        break;
+                    }
+
+                    Method legacyMethod = findMethodByName(device, "upgradeFirmware");
+                    if (legacyMethod == null) {
+                        result.error("NOT_SUPPORTED", "startFirmwareUpgrade/upgradeFirmware not found", null);
+                        break;
+                    }
+
+                    Integer type = null;
+                    if (!firmwares.isEmpty()) {
+                        Object typeObj = firmwares.get(0).get("type");
+                        if (typeObj instanceof Number) type = ((Number) typeObj).intValue();
+                        if (typeObj instanceof String) {
+                            try {
+                                type = Integer.parseInt((String) typeObj);
+                            } catch (Throwable ignore) {
+                            }
+                        }
+                    }
+                    if (type == null) {
+                        result.error("MISSING_ARGS", "firmwares[0].type is required for legacy upgrade", null);
+                        break;
+                    }
+
+                    if (legacyMethod.getParameterTypes().length == 2) {
+                        legacyMethod.invoke(device, type, new IResultCallback() {
+                            @Override
+                            public void onError(String code, String error) {
+                                result.error(code, error, null);
+                            }
+
+                            @Override
+                            public void onSuccess() {
+                                result.success(null);
+                            }
+                        });
+                    } else if (legacyMethod.getParameterTypes().length == 1) {
+                        legacyMethod.invoke(device, type);
+                        result.success(null);
+                    } else {
+                        result.error("NOT_SUPPORTED", "legacy upgradeFirmware signature not supported", null);
+                    }
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "confirmWarningUpgradeTask": {
+                String devId = call.argument("devId");
+                Boolean isContinue = call.argument("isContinue");
+                if (devId == null || devId.isEmpty() || isContinue == null) {
+                    result.error("MISSING_ARGS", "devId and isContinue are required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method method = findMethodByNameAndArgCount(device, "confirmWarningUpgradeTask", 1);
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "confirmWarningUpgradeTask not found", null);
+                        break;
+                    }
+                    method.invoke(device, isContinue);
+                    result.success(null);
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "cancelFirmwareUpgrade": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method cancelMethod = findMethodByNameAndArgCount(device, "cancelFirmwareUpgrade", 1);
+                    if (cancelMethod != null) {
+                        cancelMethod.invoke(device, new IResultCallback() {
+                            @Override
+                            public void onError(String code, String error) {
+                                result.error(code, error, null);
+                            }
+
+                            @Override
+                            public void onSuccess() {
+                                result.success(null);
+                            }
+                        });
+                        break;
+                    }
+                    Method legacyCancel = findMethodByNameAndArgCount(device, "cancelUpgradeFirmware", 2);
+                    if (legacyCancel == null) {
+                        result.error("NOT_SUPPORTED", "cancelFirmwareUpgrade/cancelUpgradeFirmware not found", null);
+                        break;
+                    }
+                    legacyCancel.invoke(device, 0, new IResultCallback() {
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+
+                        @Override
+                        public void onSuccess() {
+                            result.success(null);
+                        }
+                    });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "getAutoUpgradeSwitchInfo": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method method = findMethodByNameAndArgCount(device, "getAutoUpgradeSwitchInfo", 1);
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "getAutoUpgradeSwitchInfo not found", null);
+                        break;
+                    }
+                    method.invoke(device, new IThingDataCallback<Object>() {
+                        @Override
+                        public void onSuccess(Object data) {
+                            result.success(data);
+                        }
+
+                        @Override
+                        public void onError(String errorCode, String errorMessage) {
+                            result.error(errorCode, errorMessage, null);
+                        }
+                    });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "saveAutoUpgradeSwitchInfo": {
+                String devId = call.argument("devId");
+                Integer switchValue = call.argument("switchValue");
+                if (devId == null || devId.isEmpty() || switchValue == null) {
+                    result.error("MISSING_ARGS", "devId and switchValue are required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method method = findMethodByName(device, "saveUpgradeInfoWithSwitchValue");
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "saveUpgradeInfoWithSwitchValue not found", null);
+                        break;
+                    }
+                    if (method.getParameterTypes().length == 2) {
+                        method.invoke(device, switchValue, new IResultCallback() {
+                            @Override
+                            public void onError(String code, String error) {
+                                result.error(code, error, null);
+                            }
+
+                            @Override
+                            public void onSuccess() {
+                                result.success(null);
+                            }
+                        });
+                    } else {
+                        result.error("NOT_SUPPORTED", "saveUpgradeInfoWithSwitchValue signature not supported", null);
+                    }
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            case "memberCheckFirmwareStatus": {
+                String devId = call.argument("devId");
+                if (devId == null || devId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId is required", null);
+                    break;
+                }
+                Object device = ensureThingDevice(devId);
+                if (device == null) {
+                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                    break;
+                }
+                try {
+                    Method method = findMethodByNameAndArgCount(device, "memberCheckFirmwareStatus", 1);
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "memberCheckFirmwareStatus not found", null);
+                        break;
+                    }
+                    method.invoke(device, new IThingDataCallback<Object>() {
+                        @Override
+                        public void onSuccess(Object data) {
+                            result.success(toJsonObject(data));
+                        }
+
+                        @Override
+                        public void onError(String errorCode, String errorMessage) {
+                            result.error(errorCode, errorMessage, null);
+                        }
+                    });
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
             case "deleteAccount":
                 // cancelAccount function of the Tuya SDK is called
                 ThingHomeSdk.getUserInstance().cancelAccount(new IResultCallback() {
@@ -1258,10 +2080,11 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
 
                 break;
             case "updateRoomName":
-                // updateRoom function of Tuya SDK is called
+                // update the name of a room
+                Number updateRoomHomeId = call.argument("homeId");
                 Number updateRoomId = call.argument("roomId");
                 String updateRoomName = call.argument("roomName");
-                ThingHomeSdk.newRoomInstance(updateRoomId.intValue()).updateRoom(updateRoomName, new IResultCallback() {
+                ThingHomeSdk.newRoomInstance(updateRoomId.longValue()).updateRoom(updateRoomName, new IResultCallback() {
                     @Override
                     public void onSuccess() {
                         result.success(null);

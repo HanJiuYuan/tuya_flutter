@@ -588,7 +588,7 @@ class TuyaFlutterHaSdk {
   /// Map<String,dynamic>> deviceInfo = await discoverDeviceInfo();
   /// ```
   ///
-  /// Returns its raw JSON map, or null if none found.  
+  /// Returns its raw JSON map, or null if none found.
   ///
   /// Throws [PlatformException] on failure.
   static Future<Map<String, dynamic>?> discoverDeviceInfo() {
@@ -1753,6 +1753,266 @@ class TuyaFlutterHaSdk {
     return TuyaFlutterHaSdkPlatform.instance.controlMatter(
       devId: devId,
       dps: dps,
+    );
+  }
+
+  static Future<bool> isSupportBackupNetwork({required String devId}) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.isSupportBackupNetwork(
+      devId: devId,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> getCurrentWifiInfo({
+    required String devId,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.getCurrentWifiInfo(devId: devId);
+  }
+
+  static Future<Map<String, dynamic>?> getBackupWifiList({
+    required String devId,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.getBackupWifiList(devId: devId);
+  }
+
+  static Future<Map<String, dynamic>?> setBackupWifiList({
+    required String devId,
+    required List<Map<String, dynamic>> backupWifiList,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.setBackupWifiList(
+      devId: devId,
+      backupWifiList: backupWifiList,
+    );
+  }
+
+  static Future<String> getBackupWifiHash({
+    required String devId,
+    required String ssid,
+    required String password,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    if (ssid.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "ssid should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.getBackupWifiHash(
+      devId: devId,
+      ssid: ssid,
+      password: password,
+    );
+  }
+
+  static Future<void> wifiBackupOnDestroy({required String devId}) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.wifiBackupOnDestroy(devId: devId);
+  }
+
+  static Future<Map<String, dynamic>?> switchToNewWifi({
+    required String devId,
+    required String ssid,
+    required String password,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    if (ssid.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "ssid should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.switchToNewWifi(
+      devId: devId,
+      ssid: ssid,
+      password: password,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> switchToBackupWifi({
+    required String devId,
+    required String hash,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    if (hash.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "hash should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.switchToBackupWifi(
+      devId: devId,
+      hash: hash,
+    );
+  }
+
+  static Future<void> wifiSwitchOnDestroy({required String devId}) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.wifiSwitchOnDestroy(devId: devId);
+  }
+
+  static Future<List<Map<String, dynamic>>> checkFirmwareUpgrade({
+    required String devId,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.checkFirmwareUpgrade(devId: devId);
+  }
+
+  static Future<Map<String, dynamic>?> getFirmwareUpgradingStatus({
+    required String devId,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.getFirmwareUpgradingStatus(
+      devId: devId,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> startFirmwareUpgrade({
+    required String devId,
+    required List<Map<String, dynamic>> firmwares,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.startFirmwareUpgrade(
+      devId: devId,
+      firmwares: firmwares,
+    );
+  }
+
+  static Future<void> confirmWarningUpgradeTask({
+    required String devId,
+    required bool isContinue,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.confirmWarningUpgradeTask(
+      devId: devId,
+      isContinue: isContinue,
+    );
+  }
+
+  static Future<void> cancelFirmwareUpgrade({required String devId}) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.cancelFirmwareUpgrade(
+      devId: devId,
+    );
+  }
+
+  static Future<int?> getAutoUpgradeSwitchInfo({required String devId}) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.getAutoUpgradeSwitchInfo(
+      devId: devId,
+    );
+  }
+
+  static Future<void> saveAutoUpgradeSwitchInfo({
+    required String devId,
+    required int switchValue,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    if (switchValue != 0 && switchValue != 1) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "switchValue must be 0 or 1",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.saveAutoUpgradeSwitchInfo(
+      devId: devId,
+      switchValue: switchValue,
+    );
+  }
+
+  static Future<List<Map<String, dynamic>>> memberCheckFirmwareStatus({
+    required String devId,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message: "devId should be specified",
+      );
+    }
+    return TuyaFlutterHaSdkPlatform.instance.memberCheckFirmwareStatus(
+      devId: devId,
     );
   }
 

@@ -674,4 +674,199 @@ class MethodChannelTuyaFlutterHaSdk extends TuyaFlutterHaSdkPlatform {
       'dps': dps,
     });
   }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Backup Wi‑Fi Networks / Wi‑Fi Switching
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  @override
+  Future<bool> isSupportBackupNetwork({required String devId}) async {
+    return await methodChannel.invokeMethod<bool>(
+          'isSupportBackupNetwork',
+          <String, dynamic>{'devId': devId},
+        ) ??
+        false;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getCurrentWifiInfo({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'getCurrentWifiInfo',
+      <String, dynamic>{'devId': devId},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getBackupWifiList({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'getBackupWifiList',
+      <String, dynamic>{'devId': devId},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> setBackupWifiList({
+    required String devId,
+    required List<Map<String, dynamic>> backupWifiList,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'setBackupWifiList',
+      <String, dynamic>{'devId': devId, 'backupWifiList': backupWifiList},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<String> getBackupWifiHash({
+    required String devId,
+    required String ssid,
+    required String password,
+  }) async {
+    return await methodChannel.invokeMethod<String>(
+          'getBackupWifiHash',
+          <String, dynamic>{'devId': devId, 'ssid': ssid, 'password': password},
+        ) ??
+        '';
+  }
+
+  @override
+  Future<void> wifiBackupOnDestroy({required String devId}) async {
+    await methodChannel.invokeMethod<void>(
+      'wifiBackupOnDestroy',
+      <String, dynamic>{'devId': devId},
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>?> switchToNewWifi({
+    required String devId,
+    required String ssid,
+    required String password,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'switchToNewWifi',
+      <String, dynamic>{'devId': devId, 'ssid': ssid, 'password': password},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> switchToBackupWifi({
+    required String devId,
+    required String hash,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'switchToBackupWifi',
+      <String, dynamic>{'devId': devId, 'hash': hash},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<void> wifiSwitchOnDestroy({required String devId}) async {
+    await methodChannel.invokeMethod<void>(
+      'wifiSwitchOnDestroy',
+      <String, dynamic>{'devId': devId},
+    );
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> checkFirmwareUpgrade({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'checkFirmwareUpgrade',
+      <String, dynamic>{'devId': devId},
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getFirmwareUpgradingStatus({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'getFirmwareUpgradingStatus',
+      <String, dynamic>{'devId': devId},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> startFirmwareUpgrade({
+    required String devId,
+    required List<Map<String, dynamic>> firmwares,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
+      'startFirmwareUpgrade',
+      <String, dynamic>{'devId': devId, 'firmwares': firmwares},
+    );
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<void> confirmWarningUpgradeTask({
+    required String devId,
+    required bool isContinue,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'confirmWarningUpgradeTask',
+      <String, dynamic>{'devId': devId, 'isContinue': isContinue},
+    );
+  }
+
+  @override
+  Future<void> cancelFirmwareUpgrade({required String devId}) async {
+    await methodChannel.invokeMethod<void>(
+      'cancelFirmwareUpgrade',
+      <String, dynamic>{'devId': devId},
+    );
+  }
+
+  @override
+  Future<int?> getAutoUpgradeSwitchInfo({required String devId}) async {
+    return await methodChannel.invokeMethod<int?>(
+      'getAutoUpgradeSwitchInfo',
+      <String, dynamic>{'devId': devId},
+    );
+  }
+
+  @override
+  Future<void> saveAutoUpgradeSwitchInfo({
+    required String devId,
+    required int switchValue,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'saveAutoUpgradeSwitchInfo',
+      <String, dynamic>{'devId': devId, 'switchValue': switchValue},
+    );
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> memberCheckFirmwareStatus({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'memberCheckFirmwareStatus',
+      <String, dynamic>{'devId': devId},
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
 }

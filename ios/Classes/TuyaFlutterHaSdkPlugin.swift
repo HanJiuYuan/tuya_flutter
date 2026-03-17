@@ -6,6 +6,7 @@ import ThingModuleServices
 import ThingSmartActivatorKit
 import ThingSmartBLEKit  // BLE discovery
 import ThingSmartLockKit
+import ThingSmartBusinessExtensionKit
 
 public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
     //–– Pairing SDK state & event sink
@@ -14,6 +15,87 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
     private var pairingEventSink: FlutterEventSink?
     private var discoveryCallback: FlutterResult?
     private var device: ThingSmartDevice?
+
+    private var wifiNetworkManager: ThingDeviceNetworkManager?
+    private var wifiNetworkDevId: String?
+
+    private func ensureWifiNetworkManager(_ devId: String) -> ThingDeviceNetworkManager {
+        if wifiNetworkManager == nil || wifiNetworkDevId != devId {
+            wifiNetworkManager = ThingDeviceNetworkManager(deviceId: devId)
+            wifiNetworkDevId = devId
+        }
+        return wifiNetworkManager!
+    }
+
+    private func networkInfoToMap(_ info: ThingDeviceNetworkInfo) -> [String: Any] {
+        return [
+            "network": info.network.rawValue,
+            "ssid": info.ssid,
+            "signal": info.signal,
+            "flags": info.flags,
+            "ssidHash": info.ssidHash
+        ]
+    }
+
+    private func backupWifiModelToMap(_ model: ThingSmartBackupWifiModel) -> [String: Any] {
+        var map: [String: Any] = [:]
+        map["ssid"] = model.ssid
+        let hashStr = (model.value(forKey: "hashValue") as? String)
+        ?? (model.value(forKey: "hash") as? String)
+        ?? ""
+        map["hash"] = hashStr
+        return map
+    }
+
+    private func firmwareModelToMap(_ model: ThingSmartFirmwareUpgradeModel) -> [String: Any] {
+        return [
+            "desc": model.desc ?? "",
+            "type": model.type,
+            "typeDesc": model.typeDesc ?? "",
+            "upgradeStatus": model.upgradeStatus,
+            "version": model.version ?? "",
+            "currentVersion": model.currentVersion ?? "",
+            "devType": model.devType,
+            "upgradeType": model.upgradeType,
+            "url": model.url ?? "",
+            "fileSize": model.fileSize ?? "",
+            "md5": model.md5 ?? "",
+            "controlType": model.controlType,
+            "waitingDesc": model.waitingDesc ?? "",
+            "upgradingDesc": model.upgradingDesc ?? "",
+            "canUpgrade": model.canUpgrade as Any,
+            "remind": model.remind ?? "",
+            "upgradeMode": model.upgradeMode.rawValue
+        ]
+    }
+
+    private func firmwareStatusToMap(_ status: ThingSmartFirmwareUpgradeStatusModel) -> [String: Any] {
+        var map: [String: Any] = [
+            "upgradeStatus": status.upgradeStatus.rawValue,
+            "statusText": status.statusText ?? "",
+            "statusTitle": status.statusTitle ?? "",
+            "progress": status.progress,
+            "type": status.type,
+            "upgradeMode": status.upgradeMode.rawValue
+        ]
+        if let err = status.error as NSError? {
+            map["error"] = [
+                "code": err.code,
+                "message": err.localizedDescription,
+                "domain": err.domain
+            ]
+        }
+        return map
+    }
+
+    private func memberFirmwareInfoToMap(_ info: ThingSmartMemberCheckFirmwareInfo) -> [String: Any] {
+        return [
+            "type": info.type,
+            "upgradeStatus": info.upgradeStatus,
+            "version": info.version ?? "",
+            "upgradeText": info.upgradeText ?? ""
+        ]
+    }
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = TuyaFlutterHaSdkPlugin()
@@ -138,6 +220,311 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
             }, failure: { error in
                 let msg = error?.localizedDescription ?? "Unknown error"
                 result(FlutterError(code: "LOGOUT_FAILED", message: msg, details: nil))
+            })
+
+        case "isSupportBackupNetwork":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            result(ThingDeviceNetworkManager.supportWifiBackupNetwork(devId))
+
+        case "getCurrentWifiInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            let mgr = ensureWifiNetworkManager(devId)
+            mgr.getCurrentNetworkInfo { info in
+                result(self.networkInfoToMap(info))
+            } failure: { error in
+                let nsError = error as NSError
+                result(FlutterError(code: String(nsError.code), message: nsError.localizedDescription, details: nil))
+            }
+
+        case "getBackupWifiList":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            let mgr = ensureWifiNetworkManager(devId)
+            mgr.getBackupWifiNetworks { models, max in
+                let list = models.map { self.backupWifiModelToMap($0) }
+                result(["list": list, "max": max])
+            } failure: { error in
+                let nsError = error as NSError
+                result(FlutterError(code: String(nsError.code), message: nsError.localizedDescription, details: nil))
+            }
+
+        case "setBackupWifiList":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false,
+                  let list = args["backupWifiList"] as? [[String: Any]] else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId and backupWifiList are required", details: nil))
+                return
+            }
+            let mgr = ensureWifiNetworkManager(devId)
+            let models: [ThingSmartBackupWifiModel] = list.compactMap { item in
+                let ssid = item["ssid"] as? String
+                let pwd = item["passwd"] as? String
+                let hash = item["hash"] as? String
+                if let ssid, let pwd, pwd.isEmpty == false {
+                    return mgr.generateBackupWifiModel(withSSID: ssid, pwd: pwd)
+                }
+                if let ssid, let hash, hash.isEmpty == false {
+                    let model = ThingSmartBackupWifiModel()
+                    model.ssid = ssid
+                    model.setValue(hash, forKey: "hashValue")
+                    return model
+                }
+                return nil
+            }
+            mgr.updateBackupWifiNetworks(models) {
+                result(["success": true])
+            } failure: { error in
+                let nsError = error as NSError
+                result(FlutterError(code: String(nsError.code), message: nsError.localizedDescription, details: nil))
+            }
+
+        case "switchToNewWifi":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false,
+                  let ssid = args["ssid"] as? String,
+                  ssid.isEmpty == false,
+                  let password = args["password"] as? String else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId, ssid, password are required", details: nil))
+                return
+            }
+            let mgr = ensureWifiNetworkManager(devId)
+            mgr.switchBackupWifiNetwork(withSSID: ssid, pwd: password) {
+                result(["success": true])
+            } failure: { error in
+                let nsError = error as NSError
+                result(FlutterError(code: String(nsError.code), message: nsError.localizedDescription, details: nil))
+            }
+
+        case "switchToBackupWifi":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false,
+                  let hash = args["hash"] as? String,
+                  hash.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId and hash are required", details: nil))
+                return
+            }
+            let mgr = ensureWifiNetworkManager(devId)
+            mgr.switchBackupWifiNetwork(withHash: hash) {
+                result(["success": true])
+            } failure: { error in
+                let nsError = error as NSError
+                result(FlutterError(code: String(nsError.code), message: nsError.localizedDescription, details: nil))
+            }
+
+        case "wifiBackupOnDestroy":
+            result(nil)
+
+        case "wifiSwitchOnDestroy":
+            result(nil)
+
+        case "checkFirmwareUpgrade":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.checkFirmwareUpgrade({ firmwares in
+                let list = firmwares.map { self.firmwareModelToMap($0) }
+                result(list)
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "getFirmwareUpgradingStatus":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.getFirmwareUpgradingStatus({ status in
+                result(self.firmwareStatusToMap(status))
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "startFirmwareUpgrade":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            let requestFirmwares = args["firmwares"] as? [[String: Any]] ?? []
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.checkFirmwareUpgrade({ firmwares in
+                let candidates: [ThingSmartFirmwareUpgradeModel]
+                if requestFirmwares.isEmpty {
+                    candidates = firmwares.filter { $0.upgradeStatus == 1 }
+                } else {
+                    let targets = requestFirmwares.compactMap { item -> String? in
+                        guard let type = item["type"] else { return nil }
+                        let mode = item["upgradeMode"] ?? 0
+                        return "\(type)-\(mode)"
+                    }
+                    candidates = firmwares.filter { model in
+                        targets.contains("\(model.type)-\(model.upgradeMode.rawValue)")
+                    }
+                }
+                if candidates.isEmpty {
+                    result(FlutterError(code: "NO_UPGRADABLE_FIRMWARE", message: "No firmware can be upgraded", details: nil))
+                    return
+                }
+                self.device = device
+                self.device?.delegate = self
+                device.startFirmwareUpgrade(candidates)
+                result(["started": true, "count": candidates.count])
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "confirmWarningUpgradeTask":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false,
+                  let isContinue = args["isContinue"] as? Bool else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId and isContinue are required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.confirmWarningUpgradeTask(isContinue)
+            result(nil)
+
+        case "cancelFirmwareUpgrade":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.cancelFirmwareUpgrade(success: {
+                result(nil)
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "getAutoUpgradeSwitchInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.getAutoUpgradeSwitchInfo(success: { status in
+                result(status)
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "saveAutoUpgradeSwitchInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false,
+                  let switchValue = args["switchValue"] as? Int else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId and switchValue are required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.saveUpgradeInfo(withSwitchValue: switchValue, success: {
+                result(nil)
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
+            })
+
+        case "memberCheckFirmwareStatus":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  devId.isEmpty == false else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId is required", details: nil))
+                return
+            }
+            guard let device = ThingSmartDevice(deviceId: devId) else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
+                return
+            }
+            device.memberCheckFirmwareStatus(success: { infos in
+                let list = infos.map { self.memberFirmwareInfoToMap($0) }
+                result(list)
+            }, failure: { error in
+                let nsError = error as NSError?
+                result(FlutterError(
+                    code: String(nsError?.code ?? -1),
+                    message: nsError?.localizedDescription ?? "Unknown error",
+                    details: nil
+                ))
             })
             
         case "deleteAccount":
@@ -1169,5 +1556,13 @@ extension TuyaFlutterHaSdkPlugin: ThingSmartDeviceDelegate {
     func device(_ device: ThingSmartDevice!, signal: String!) {
         print(" signal : \(signal)")
         self.pairingEventSink?(signal)
+    }
+
+    func device(_ device: ThingSmartDevice, otaUpdateStatusChanged statusModel: ThingSmartFirmwareUpgradeStatusModel) {
+        self.pairingEventSink?([
+            "event": "otaUpdateStatusChanged",
+            "devId": device.deviceModel.devId ?? "",
+            "status": firmwareStatusToMap(statusModel)
+        ])
     }
 }
