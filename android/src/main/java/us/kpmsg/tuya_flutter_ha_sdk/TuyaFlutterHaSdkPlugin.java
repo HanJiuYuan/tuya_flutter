@@ -101,6 +101,9 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     private String wifiBackupDevId;
     private Object wifiSwitchManager;
     private String wifiSwitchDevId;
+    private Object otaService;
+    private String otaServiceDevId;
+    private Object otaListenerProxy;
 
     private TuyaCameraPlugin tuyaCameraPlugin;
 
@@ -216,6 +219,30 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
         return null;
     }
 
+    private Object ensureOtaService(String devId) {
+        if (otaService == null || otaServiceDevId == null || !otaServiceDevId.equals(devId)) {
+            otaService = null;
+            try {
+                otaService = ThingHomeSdk.class
+                        .getMethod("newOTAServiceInstance", String.class)
+                        .invoke(null, devId);
+            } catch (Throwable ignore) {
+            }
+            if (otaService == null) {
+                try {
+                    Class<?> tuyaHomeSdkClazz = Class.forName("com.tuya.smart.home.sdk.TuyaHomeSdk");
+                    otaService = tuyaHomeSdkClazz
+                            .getMethod("newOTAServiceInstance", String.class)
+                            .invoke(null, devId);
+                } catch (Throwable ignore) {
+                    otaService = null;
+                }
+            }
+            otaServiceDevId = devId;
+        }
+        return otaService;
+    }
+
     private Method findMethodByName(Object target, String methodName) {
         if (target == null || methodName == null) return null;
         for (Method m : target.getClass().getMethods()) {
@@ -252,6 +279,48 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
         } catch (Throwable ignore) {
         }
         return data;
+    }
+
+    private interface OtaCallbackHandler {
+        void onSuccess(Object data);
+
+        void onFailure(String code, String message);
+    }
+
+    private Object createCallbackProxy(Class<?> callbackClazz, OtaCallbackHandler handler) {
+        if (callbackClazz == null) return null;
+        return java.lang.reflect.Proxy.newProxyInstance(
+                callbackClazz.getClassLoader(),
+                new Class[]{callbackClazz},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if ("onSuccess".equals(name)) {
+                        Object data = (args != null && args.length > 0) ? args[0] : null;
+                        handler.onSuccess(data);
+                        return null;
+                    }
+                    if ("onError".equals(name) || "onFailure".equals(name)) {
+                        String code = (args != null && args.length > 0 && args[0] != null) ? String.valueOf(args[0]) : "ERROR";
+                        String msg = (args != null && args.length > 1 && args[1] != null) ? String.valueOf(args[1]) : null;
+                        handler.onFailure(code, msg);
+                        return null;
+                    }
+                    if ("firmwareUpgradeStatus".equals(name)) {
+                        try {
+                            if (eventSink != null) {
+                                HashMap<String, Object> payload = new HashMap<>();
+                                payload.put("event", "otaUpdateStatusChanged");
+                                Object statusBean = (args != null && args.length > 0) ? args[0] : null;
+                                payload.put("status", toJsonObject(statusBean));
+                                eventSink.success(payload);
+                            }
+                        } catch (Throwable ignore) {
+                        }
+                        return null;
+                    }
+                    return null;
+                }
+        );
     }
 
 
@@ -977,31 +1046,33 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method checkMethod = findMethodByNameAndArgCount(device, "checkFirmwareUpgrade", 1);
+                    Method checkMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradeInfo", 1);
                     if (checkMethod == null) {
-                        checkMethod = findMethodByNameAndArgCount(device, "getFirmwareUpgradeInfo", 1);
+                        checkMethod = findMethodByNameAndArgCount(service, "checkFirmwareUpgrade", 1);
                     }
                     if (checkMethod == null) {
-                        result.error("NOT_SUPPORTED", "checkFirmwareUpgrade/getFirmwareUpgradeInfo not found", null);
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo/checkFirmwareUpgrade not found", null);
                         break;
                     }
-                    checkMethod.invoke(device, new IThingDataCallback<Object>() {
+                    Class<?> cbClazz = checkMethod.getParameterTypes()[0];
+                    Object cb = createCallbackProxy(cbClazz, new OtaCallbackHandler() {
                         @Override
                         public void onSuccess(Object data) {
                             result.success(toJsonObject(data));
                         }
 
                         @Override
-                        public void onError(String errorCode, String errorMessage) {
-                            result.error(errorCode, errorMessage, null);
+                        public void onFailure(String code, String message) {
+                            result.error(code, message, null);
                         }
                     });
+                    checkMethod.invoke(service, cb);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
                 }
@@ -1014,28 +1085,33 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method statusMethod = findMethodByNameAndArgCount(device, "getFirmwareUpgradingStatus", 1);
+                    Method statusMethod = findMethodByNameAndArgCount(service, "getUpgradeProgress", 1);
                     if (statusMethod == null) {
-                        result.error("NOT_SUPPORTED", "getFirmwareUpgradingStatus not found", null);
+                        statusMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradingStatus", 1);
+                    }
+                    if (statusMethod == null) {
+                        result.error("NOT_SUPPORTED", "getUpgradeProgress/getFirmwareUpgradingStatus not found", null);
                         break;
                     }
-                    statusMethod.invoke(device, new IThingDataCallback<Object>() {
+                    Class<?> cbClazz = statusMethod.getParameterTypes()[0];
+                    Object cb = createCallbackProxy(cbClazz, new OtaCallbackHandler() {
                         @Override
                         public void onSuccess(Object data) {
                             result.success(toMap(data));
                         }
 
                         @Override
-                        public void onError(String errorCode, String errorMessage) {
-                            result.error(errorCode, errorMessage, null);
+                        public void onFailure(String code, String message) {
+                            result.error(code, message, null);
                         }
                     });
+                    statusMethod.invoke(service, cb);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
                 }
@@ -1053,59 +1129,107 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "firmwares is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method startMethod = findMethodByNameAndArgCount(device, "startFirmwareUpgrade", 1);
-                    if (startMethod != null) {
-                        startMethod.invoke(device, firmwares);
-                        result.success(null);
+                    Method getInfoMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradeInfo", 1);
+                    if (getInfoMethod == null) {
+                        getInfoMethod = findMethodByNameAndArgCount(service, "checkFirmwareUpgrade", 1);
+                    }
+                    if (getInfoMethod == null) {
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo/checkFirmwareUpgrade not found", null);
                         break;
                     }
-
-                    Method legacyMethod = findMethodByName(device, "upgradeFirmware");
-                    if (legacyMethod == null) {
-                        result.error("NOT_SUPPORTED", "startFirmwareUpgrade/upgradeFirmware not found", null);
+                    Method startMethod = findMethodByNameAndArgCount(service, "startFirmwareUpgrade", 1);
+                    if (startMethod == null) {
+                        result.error("NOT_SUPPORTED", "startFirmwareUpgrade not found", null);
                         break;
                     }
-
-                    Integer type = null;
-                    if (!firmwares.isEmpty()) {
-                        Object typeObj = firmwares.get(0).get("type");
-                        if (typeObj instanceof Number) type = ((Number) typeObj).intValue();
-                        if (typeObj instanceof String) {
+                    Class<?> cbClazz = getInfoMethod.getParameterTypes()[0];
+                    Object cb = createCallbackProxy(cbClazz, new OtaCallbackHandler() {
+                        @Override
+                        public void onSuccess(Object data) {
                             try {
-                                type = Integer.parseInt((String) typeObj);
-                            } catch (Throwable ignore) {
+                                List<?> available = (data instanceof List) ? (List<?>) data : new ArrayList<>();
+                                ArrayList<Object> selected = new ArrayList<>();
+                                if (firmwares.isEmpty()) {
+                                    for (Object item : available) {
+                                        if (item == null) continue;
+                                        Map<String, Object> m = toMap(item);
+                                        Object upgradeStatus = (m != null) ? m.get("upgradeStatus") : null;
+                                        int status = -1;
+                                        if (upgradeStatus instanceof Number) {
+                                            status = ((Number) upgradeStatus).intValue();
+                                        } else if (upgradeStatus instanceof String) {
+                                            try {
+                                                status = Integer.parseInt((String) upgradeStatus);
+                                            } catch (Throwable ignore) {
+                                            }
+                                        }
+                                        if (status == 1) {
+                                            selected.add(item);
+                                        }
+                                    }
+                                } else {
+                                    for (Object item : available) {
+                                        if (item == null) continue;
+                                        Map<String, Object> m = toMap(item);
+                                        if (m == null) continue;
+                                        Object curType = m.get("type");
+                                        Object curMode = m.get("upgradeMode");
+                                        for (Map<String, Object> req : firmwares) {
+                                            Object reqType = req.get("type");
+                                            Object reqMode = req.get("upgradeMode");
+                                            boolean typeEq = (curType == null && reqType == null)
+                                                    || (curType != null && reqType != null && String.valueOf(curType).equals(String.valueOf(reqType)));
+                                            boolean modeEq = (reqMode == null)
+                                                    || (curMode != null && String.valueOf(curMode).equals(String.valueOf(reqMode)));
+                                            if (typeEq && modeEq) {
+                                                selected.add(item);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (selected.isEmpty()) {
+                                    result.error("NO_UPGRADABLE_FIRMWARE", "No firmware can be upgraded", null);
+                                    return;
+                                }
+                                if (eventSink != null) {
+                                    Method registerMethod = findMethodByNameAndArgCount(service, "registerDevOTAListener", 1);
+                                    if (registerMethod != null && otaListenerProxy == null) {
+                                        Class<?> listenerClazz = registerMethod.getParameterTypes()[0];
+                                        otaListenerProxy = createCallbackProxy(listenerClazz, new OtaCallbackHandler() {
+                                            @Override
+                                            public void onSuccess(Object ignore) {
+                                            }
+
+                                            @Override
+                                            public void onFailure(String code, String message) {
+                                            }
+                                        });
+                                        registerMethod.invoke(service, otaListenerProxy);
+                                    }
+                                }
+                                startMethod.invoke(service, selected);
+                                HashMap<String, Object> started = new HashMap<>();
+                                started.put("started", true);
+                                started.put("count", selected.size());
+                                result.success(started);
+                            } catch (Throwable t) {
+                                result.error("CALL_FAILED", t.getMessage(), null);
                             }
                         }
-                    }
-                    if (type == null) {
-                        result.error("MISSING_ARGS", "firmwares[0].type is required for legacy upgrade", null);
-                        break;
-                    }
 
-                    if (legacyMethod.getParameterTypes().length == 2) {
-                        legacyMethod.invoke(device, type, new IResultCallback() {
-                            @Override
-                            public void onError(String code, String error) {
-                                result.error(code, error, null);
-                            }
-
-                            @Override
-                            public void onSuccess() {
-                                result.success(null);
-                            }
-                        });
-                    } else if (legacyMethod.getParameterTypes().length == 1) {
-                        legacyMethod.invoke(device, type);
-                        result.success(null);
-                    } else {
-                        result.error("NOT_SUPPORTED", "legacy upgradeFirmware signature not supported", null);
-                    }
+                        @Override
+                        public void onFailure(String code, String message) {
+                            result.error(code, message, null);
+                        }
+                    });
+                    getInfoMethod.invoke(service, cb);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
                 }
@@ -1119,18 +1243,23 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId and isContinue are required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method method = findMethodByNameAndArgCount(device, "confirmWarningUpgradeTask", 1);
+                    Method method = findMethodByNameAndArgCount(service, "confirmWarningUpgradeTask", 2);
                     if (method == null) {
-                        result.error("NOT_SUPPORTED", "confirmWarningUpgradeTask not found", null);
-                        break;
+                        method = findMethodByNameAndArgCount(service, "confirmWarningUpgradeTask", 1);
+                        if (method == null) {
+                            result.error("NOT_SUPPORTED", "confirmWarningUpgradeTask not found", null);
+                            break;
+                        }
+                        method.invoke(service, isContinue);
+                    } else {
+                        method.invoke(service, devId, isContinue);
                     }
-                    method.invoke(device, isContinue);
                     result.success(null);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
@@ -1140,19 +1269,23 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
 
             case "cancelFirmwareUpgrade": {
                 String devId = call.argument("devId");
+                Integer otaType = call.argument("otaType");
                 if (devId == null || devId.isEmpty()) {
                     result.error("MISSING_ARGS", "devId is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method cancelMethod = findMethodByNameAndArgCount(device, "cancelFirmwareUpgrade", 1);
+                    Method cancelMethod = null;
+                    if (otaType != null) {
+                        cancelMethod = findMethodByNameAndArgCount(service, "cancelFirmwareUpgrade", 2);
+                    }
                     if (cancelMethod != null) {
-                        cancelMethod.invoke(device, new IResultCallback() {
+                        cancelMethod.invoke(service, otaType, new IResultCallback() {
                             @Override
                             public void onError(String code, String error) {
                                 result.error(code, error, null);
@@ -1165,12 +1298,27 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                         });
                         break;
                     }
-                    Method legacyCancel = findMethodByNameAndArgCount(device, "cancelUpgradeFirmware", 2);
+                    Method cancelNoType = findMethodByNameAndArgCount(service, "cancelFirmwareUpgrade", 1);
+                    if (cancelNoType != null) {
+                        cancelNoType.invoke(service, new IResultCallback() {
+                            @Override
+                            public void onError(String code, String error) {
+                                result.error(code, error, null);
+                            }
+
+                            @Override
+                            public void onSuccess() {
+                                result.success(null);
+                            }
+                        });
+                        break;
+                    }
+                    Method legacyCancel = findMethodByNameAndArgCount(service, "cancelUpgradeFirmware", 2);
                     if (legacyCancel == null) {
                         result.error("NOT_SUPPORTED", "cancelFirmwareUpgrade/cancelUpgradeFirmware not found", null);
                         break;
                     }
-                    legacyCancel.invoke(device, 0, new IResultCallback() {
+                    legacyCancel.invoke(service, otaType != null ? otaType : 0, new IResultCallback() {
                         @Override
                         public void onError(String code, String error) {
                             result.error(code, error, null);
@@ -1193,28 +1341,33 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method method = findMethodByNameAndArgCount(device, "getAutoUpgradeSwitchInfo", 1);
+                    Method method = findMethodByNameAndArgCount(service, "getAutoUpgradeSwitchState", 1);
                     if (method == null) {
-                        result.error("NOT_SUPPORTED", "getAutoUpgradeSwitchInfo not found", null);
+                        method = findMethodByNameAndArgCount(service, "getAutoUpgradeSwitchInfo", 1);
+                    }
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "getAutoUpgradeSwitchState/getAutoUpgradeSwitchInfo not found", null);
                         break;
                     }
-                    method.invoke(device, new IThingDataCallback<Object>() {
+                    Class<?> cbClazz = method.getParameterTypes()[0];
+                    Object cb = createCallbackProxy(cbClazz, new OtaCallbackHandler() {
                         @Override
                         public void onSuccess(Object data) {
                             result.success(data);
                         }
 
                         @Override
-                        public void onError(String errorCode, String errorMessage) {
-                            result.error(errorCode, errorMessage, null);
+                        public void onFailure(String code, String message) {
+                            result.error(code, message, null);
                         }
                     });
+                    method.invoke(service, cb);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
                 }
@@ -1228,19 +1381,22 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId and switchValue are required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method method = findMethodByName(device, "saveUpgradeInfoWithSwitchValue");
+                    Method method = findMethodByNameAndArgCount(service, "changeAutoUpgradeSwitchState", 2);
                     if (method == null) {
-                        result.error("NOT_SUPPORTED", "saveUpgradeInfoWithSwitchValue not found", null);
+                        method = findMethodByName(service, "saveUpgradeInfoWithSwitchValue");
+                    }
+                    if (method == null) {
+                        result.error("NOT_SUPPORTED", "changeAutoUpgradeSwitchState/saveUpgradeInfoWithSwitchValue not found", null);
                         break;
                     }
                     if (method.getParameterTypes().length == 2) {
-                        method.invoke(device, switchValue, new IResultCallback() {
+                        method.invoke(service, switchValue, new IResultCallback() {
                             @Override
                             public void onError(String code, String error) {
                                 result.error(code, error, null);
@@ -1266,28 +1422,30 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     result.error("MISSING_ARGS", "devId is required", null);
                     break;
                 }
-                Object device = ensureThingDevice(devId);
-                if (device == null) {
-                    result.error("DEVICE_NOT_FOUND", "Device instance is null", null);
+                Object service = ensureOtaService(devId);
+                if (service == null) {
+                    result.error("NOT_SUPPORTED", "OTA service is not available in current SDK", null);
                     break;
                 }
                 try {
-                    Method method = findMethodByNameAndArgCount(device, "memberCheckFirmwareStatus", 1);
+                    Method method = findMethodByNameAndArgCount(service, "memberCheckFirmwareStatus", 1);
                     if (method == null) {
                         result.error("NOT_SUPPORTED", "memberCheckFirmwareStatus not found", null);
                         break;
                     }
-                    method.invoke(device, new IThingDataCallback<Object>() {
+                    Class<?> cbClazz = method.getParameterTypes()[0];
+                    Object cb = createCallbackProxy(cbClazz, new OtaCallbackHandler() {
                         @Override
                         public void onSuccess(Object data) {
                             result.success(toJsonObject(data));
                         }
 
                         @Override
-                        public void onError(String errorCode, String errorMessage) {
-                            result.error(errorCode, errorMessage, null);
+                        public void onFailure(String code, String message) {
+                            result.error(code, message, null);
                         }
                     });
+                    method.invoke(service, cb);
                 } catch (Throwable t) {
                     result.error("CALL_FAILED", t.getMessage(), null);
                 }

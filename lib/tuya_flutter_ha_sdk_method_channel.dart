@@ -831,10 +831,13 @@ class MethodChannelTuyaFlutterHaSdk extends TuyaFlutterHaSdkPlatform {
   }
 
   @override
-  Future<void> cancelFirmwareUpgrade({required String devId}) async {
+  Future<void> cancelFirmwareUpgrade({
+    required String devId,
+    int? otaType,
+  }) async {
     await methodChannel.invokeMethod<void>(
       'cancelFirmwareUpgrade',
-      <String, dynamic>{'devId': devId},
+      <String, dynamic>{'devId': devId, 'otaType': otaType},
     );
   }
 

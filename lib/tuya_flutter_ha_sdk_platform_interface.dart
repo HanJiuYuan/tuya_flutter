@@ -336,7 +336,8 @@ abstract class TuyaFlutterHaSdkPlatform extends PlatformInterface {
   });
 
   /// Cancel firmware upgrade (mainly for waiting wake-up state)
-  Future<void> cancelFirmwareUpgrade({required String devId});
+  /// [otaType] is optional for SDKs that require specific firmware type.
+  Future<void> cancelFirmwareUpgrade({required String devId, int? otaType});
 
   /// Get auto-upgrade switch status (0/1)
   Future<int?> getAutoUpgradeSwitchInfo({required String devId});

@@ -1956,7 +1956,10 @@ class TuyaFlutterHaSdk {
     );
   }
 
-  static Future<void> cancelFirmwareUpgrade({required String devId}) {
+  static Future<void> cancelFirmwareUpgrade({
+    required String devId,
+    int? otaType,
+  }) {
     if (devId.isEmpty) {
       throw PlatformException(
         code: "INVALID_PARAMETER",
@@ -1965,6 +1968,7 @@ class TuyaFlutterHaSdk {
     }
     return TuyaFlutterHaSdkPlatform.instance.cancelFirmwareUpgrade(
       devId: devId,
+      otaType: otaType,
     );
   }
 
