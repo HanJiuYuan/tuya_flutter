@@ -158,4 +158,16 @@ abstract class TuyaCameraPlatform extends PlatformInterface {
 
   /// 设置云视频静音
   Future<void> setCloudVideoMute({required int mute});
+
+  /// 准备多目分屏直播能力，返回能力检测和分割协议信息
+  Future<Map<String, dynamic>> prepareMultiLiveStream({
+    required String devId,
+    int widthPixels = 0,
+  });
+
+  /// 绑定分屏渲染视图与镜头索引关系
+  Future<void> registerVideoViewIndexPairs({
+    required String devId,
+    required List<Map<String, dynamic>> pairs,
+  });
 }

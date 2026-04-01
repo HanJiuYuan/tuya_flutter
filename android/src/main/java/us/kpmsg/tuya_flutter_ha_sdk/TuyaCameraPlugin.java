@@ -53,6 +53,7 @@ import androidx.annotation.Nullable;
 
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.util.Log;
 
 import java.io.File;
@@ -1039,6 +1040,29 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
                 break;
             }
 
+            case "prepareMultiLiveStream": {
+                String multiDevId = call.argument("devId");
+                Number widthPixelsNumber = call.argument("widthPixels");
+                int widthPixels = widthPixelsNumber != null ? widthPixelsNumber.intValue() : 0;
+                if (tuyaCameraViewFactory == null) {
+                    result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraViewFactory is null", null);
+                    break;
+                }
+                tuyaCameraViewFactory.prepareMultiLiveStream(multiDevId, widthPixels, result);
+                break;
+            }
+
+            case "registerVideoViewIndexPairs": {
+                String multiDevId = call.argument("devId");
+                List<Map<String, Object>> pairs = call.argument("pairs");
+                if (tuyaCameraViewFactory == null) {
+                    result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraViewFactory is null", null);
+                    break;
+                }
+                tuyaCameraViewFactory.registerVideoViewIndexPairs(multiDevId, pairs, result);
+                break;
+            }
+
         }
     }
 }
@@ -1209,6 +1233,36 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
             result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
         }
     }
+
+    public void prepareMultiLiveStream(String devId, int widthPixels, MethodChannel.Result result) {
+        TuyaCameraPlatformView targetView = null;
+        if (devId != null && !devId.isEmpty()) {
+            targetView = cameraViews.get(devId);
+        }
+        if (targetView == null) {
+            targetView = tuyaCameraPlatformView;
+        }
+        if (targetView != null) {
+            targetView.prepareMultiLiveStream(devId, widthPixels, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
+        }
+    }
+
+    public void registerVideoViewIndexPairs(String devId, List<Map<String, Object>> pairs, MethodChannel.Result result) {
+        TuyaCameraPlatformView targetView = null;
+        if (devId != null && !devId.isEmpty()) {
+            targetView = cameraViews.get(devId);
+        }
+        if (targetView == null) {
+            targetView = tuyaCameraPlatformView;
+        }
+        if (targetView != null) {
+            targetView.registerVideoViewIndexPairs(pairs, result);
+        } else {
+            result.error("CAMERA_VIEW_NOT_READY", "TuyaCameraPlatformView is null", null);
+        }
+    }
 }
 
 class TuyaCameraPlatformView implements PlatformView {
@@ -1220,6 +1274,12 @@ class TuyaCameraPlatformView implements PlatformView {
 
     private Context pluginContext;
     private ThingCameraView cameraView;
+    private Object multiCameraView;
+    private boolean isMultiLiveMode = false;
+    private boolean multiVideoViewCreated = false;
+    private boolean videoSegmentationSupported = false;
+    private String videoSplitInfoJson = null;
+    private Object videoSplitInfoModel = null;
     private boolean isTalking = false;
 
     public ThingCameraView getCameraView() {
@@ -1249,6 +1309,10 @@ class TuyaCameraPlatformView implements PlatformView {
         Log.i("Device Id", devId);
         // 记录插件上下文，用于本地录像等功能
         pluginContext = context.getApplicationContext();
+
+        Number viewWidthPixels = creationParams != null ? (Number) creationParams.get("cameraViewWidthPixels") : null;
+        int widthPixels = viewWidthPixels != null ? viewWidthPixels.intValue() : 0;
+
         IThingIPCCore cameraInstance = ThingIPCSdk.getCameraInstance();
         if (cameraInstance != null) {
             // 1. 创建 P2P 相机实例（与官方 CameraPanelActivity 中 initData 一致）
@@ -1271,6 +1335,11 @@ class TuyaCameraPlatformView implements PlatformView {
             });
             // 以 devId 创建视频渲染视图（官方 demo 也是使用 devId）
             cameraView.createVideoView(devId);
+
+            Boolean enableMultiLive = creationParams != null ? (Boolean) creationParams.get("enableMultiLive") : null;
+            if (enableMultiLive != null && enableMultiLive) {
+                tryEnableMultiLiveView(widthPixels);
+            }
 
             // 3. 注册 P2P 监听，用于回声数据（对讲）和会话状态（自动重连）
             mCameraP2P.registerP2PCameraListener(new com.thingclips.smart.camera.camerasdk.thingplayer.callback.AbsP2pCameraListener() {
@@ -1417,6 +1486,13 @@ class TuyaCameraPlatformView implements PlatformView {
                 cameraView.onResume();
             } catch (Exception e) {
                 Log.w("CAMERA", "cameraView.onResume error: " + e.getMessage(), e);
+            }
+        }
+        if (multiCameraView != null) {
+            try {
+                invokeNoArgMethodIfExists(multiCameraView, "onResume");
+            } catch (Throwable t) {
+                Log.w("CAMERA", "multiCameraView.onResume error", t);
             }
         }
 
@@ -1570,6 +1646,13 @@ class TuyaCameraPlatformView implements PlatformView {
                 cameraView.onPause();
             } catch (Exception e) {
                 Log.w("CAMERA", "cameraView.onPause error: " + e.getMessage(), e);
+            }
+        }
+        if (multiCameraView != null) {
+            try {
+                invokeNoArgMethodIfExists(multiCameraView, "onPause");
+            } catch (Throwable t) {
+                Log.w("CAMERA", "multiCameraView.onPause error", t);
             }
         }
 
@@ -2102,5 +2185,303 @@ class TuyaCameraPlatformView implements PlatformView {
                 result.error("SNAPSHOT_CONFIG_FAILED", String.valueOf(errCode), null);
             }
         });
+    }
+
+    public void prepareMultiLiveStream(String targetDevId, int widthPixels, MethodChannel.Result result) {
+        if (mCameraP2P == null) {
+            result.error("CAMERA_P2P_NULL", "Camera P2P instance is null", null);
+            return;
+        }
+
+        String requestDevId = (targetDevId != null && !targetDevId.isEmpty()) ? targetDevId : devId;
+        if (requestDevId == null || requestDevId.isEmpty()) {
+            result.error("MISSING_ARGS", "devId required", null);
+            return;
+        }
+        if (!requestDevId.equals(devId)) {
+            result.error("DEVICE_MISMATCH", "Current platform view does not match requested devId", null);
+            return;
+        }
+
+        Map<String, Object> splitInfo = resolveVideoSegmentationInfo();
+        boolean support = Boolean.TRUE.equals(splitInfo.get("support"));
+        if (!support) {
+            result.success(splitInfo);
+            return;
+        }
+
+        boolean prepared = tryEnableMultiLiveView(widthPixels);
+        splitInfo.put("multiViewPrepared", prepared);
+        if (!prepared) {
+            result.success(splitInfo);
+            return;
+        }
+
+        mCameraP2P.connect(requestDevId, new OperationDelegateCallBack() {
+            @Override
+            public void onSuccess(int sessionId, int requestId, String data) {
+                Log.i("CAMERA", "✅ Multi live P2P connected: sessionId=" + sessionId + ", requestId=" + requestId);
+                splitInfo.put("connected", true);
+                splitInfo.put("sessionId", sessionId);
+                splitInfo.put("requestId", requestId);
+                mainHandler.post(() -> result.success(splitInfo));
+                internalStartPreview(videoClarity);
+            }
+
+            @Override
+            public void onFailure(int sessionId, int requestId, int errCode) {
+                Log.e("CAMERA", "❌ Multi live connect failed, errCode=" + errCode);
+                mainHandler.post(() -> result.error("MULTI_LIVE_CONNECT_FAILED", "Error code: " + errCode, null));
+            }
+        });
+    }
+
+    public void registerVideoViewIndexPairs(List<Map<String, Object>> pairs, MethodChannel.Result result) {
+        if (multiCameraView == null) {
+            result.error("MULTI_VIEW_NOT_READY", "ThingMultiCameraView is not initialized", null);
+            return;
+        }
+        if (pairs == null || pairs.isEmpty()) {
+            result.error("MISSING_ARGS", "pairs required", null);
+            return;
+        }
+
+        HashMap<Integer, Integer> indexMap = new HashMap<>();
+        for (Map<String, Object> pair : pairs) {
+            if (pair == null) continue;
+            Number viewIndex = (Number) pair.get("viewIndex");
+            if (viewIndex == null) {
+                viewIndex = (Number) pair.get("splitIndex");
+            }
+            Number cameraIndex = (Number) pair.get("cameraIndex");
+            if (cameraIndex == null) {
+                cameraIndex = (Number) pair.get("lensId");
+            }
+            if (cameraIndex == null && viewIndex != null) {
+                cameraIndex = viewIndex;
+            }
+            if (viewIndex != null && cameraIndex != null) {
+                indexMap.put(viewIndex.intValue(), cameraIndex.intValue());
+            }
+        }
+
+        if (indexMap.isEmpty()) {
+            result.error("INVALID_ARGS", "pairs contains no valid index mapping", null);
+            return;
+        }
+
+        boolean called = invokeRegisterVideoPairs(indexMap);
+        if (!called) {
+            result.error("NOT_SUPPORTED", "registerVideoViewIndexPairs API not found in current SDK", null);
+            return;
+        }
+        result.success(null);
+    }
+
+    private Map<String, Object> resolveVideoSegmentationInfo() {
+        HashMap<String, Object> out = new HashMap<>();
+        out.put("support", false);
+        out.put("devId", devId);
+
+        if (mCameraP2P == null) {
+            out.put("reason", "cameraP2PNull");
+            return out;
+        }
+
+        Object supportFromP2P = invokeNoArgMethodIfExists(mCameraP2P, "isSupportVideoSegmentation");
+        if (supportFromP2P instanceof Boolean) {
+            videoSegmentationSupported = (Boolean) supportFromP2P;
+        }
+
+        Object advancedConfig = invokeNoArgMethodIfExists(mCameraP2P, "getAdvancedConfig");
+        if (advancedConfig != null) {
+            Object advancedSupport = invokeNoArgMethodIfExists(advancedConfig, "isSupportedVideoSplitting");
+            if (advancedSupport instanceof Boolean && (Boolean) advancedSupport) {
+                videoSegmentationSupported = true;
+            }
+        }
+
+        if (videoSegmentationSupported) {
+            videoSplitInfoModel = invokeNoArgMethodIfExists(mCameraP2P, "getCameraVideoSegmentationModel");
+            if (videoSplitInfoModel != null) {
+                Object jsonFromModel = invokeNoArgMethodIfExists(videoSplitInfoModel, "toJson");
+                if (jsonFromModel instanceof String) {
+                    videoSplitInfoJson = (String) jsonFromModel;
+                } else {
+                    videoSplitInfoJson = String.valueOf(videoSplitInfoModel);
+                }
+            }
+
+            if ((videoSplitInfoJson == null || videoSplitInfoJson.isEmpty()) && advancedConfig != null) {
+                Object splitJson = invokeNoArgMethodIfExists(advancedConfig, "getCameraSplitVideoInfoJson");
+                if (!(splitJson instanceof String) || ((String) splitJson).isEmpty()) {
+                    splitJson = invokeNoArgMethodIfExists(advancedConfig, "cameraSplitVideoInfoJson");
+                }
+                if (splitJson instanceof String) {
+                    videoSplitInfoJson = (String) splitJson;
+                }
+            }
+        }
+
+        out.put("support", videoSegmentationSupported);
+        out.put("videoSplitInfoJson", videoSplitInfoJson);
+        out.put("hasVideoSplitInfoModel", videoSplitInfoModel != null);
+        return out;
+    }
+
+    private boolean tryEnableMultiLiveView(int widthPixels) {
+        if (!videoSegmentationSupported) {
+            resolveVideoSegmentationInfo();
+        }
+        if (!videoSegmentationSupported) {
+            Log.i("CAMERA", "Current stream does not support video segmentation, fallback to single view.");
+            return false;
+        }
+        if (view == null || !(view instanceof ViewGroup)) {
+            Log.w("CAMERA", "Root view is not ViewGroup, cannot mount ThingMultiCameraView");
+            return false;
+        }
+
+        try {
+            if (multiCameraView == null) {
+                Class<?> multiViewClass = Class.forName("com.thingclips.smart.camera.middleware.widget.ThingMultiCameraView");
+                java.lang.reflect.Constructor<?> ctor = multiViewClass.getConstructor(Context.class);
+                Object instance = ctor.newInstance(pluginContext != null ? pluginContext : ((ViewGroup) view).getContext());
+                if (!(instance instanceof View)) {
+                    Log.w("CAMERA", "ThingMultiCameraView instance is not a View");
+                    return false;
+                }
+                multiCameraView = instance;
+
+                ViewGroup root = (ViewGroup) view;
+                root.removeAllViews();
+                ViewGroup.LayoutParams params = new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                );
+                root.addView((View) multiCameraView, params);
+            }
+
+            if (videoSplitInfoModel != null) {
+                invokeMethodIfExists(multiCameraView, "setThingVideoSplitInfo", videoSplitInfoModel);
+            } else if (videoSplitInfoJson != null && !videoSplitInfoJson.isEmpty()) {
+                invokeMethodIfExists(multiCameraView, "setThingVideoSplitInfo", videoSplitInfoJson);
+            }
+
+            if (widthPixels > 0) {
+                invokeMethodIfExists(multiCameraView, "setCameraViewWidth", widthPixels);
+            }
+
+            invokeMethodIfExists(multiCameraView, "setViewCallback", new AbsVideoViewCallback() {
+                @Override
+                public void onCreated(Object renderView) {
+                    super.onCreated(renderView);
+                    if (mCameraP2P != null) {
+                        mCameraP2P.generateCameraView(renderView);
+                    }
+                    if (!multiVideoViewCreated && multiCameraView != null) {
+                        invokeMethodIfExists(multiCameraView, "createVideoView", devId);
+                        multiVideoViewCreated = true;
+                    }
+                }
+            });
+
+            if (!multiVideoViewCreated) {
+                invokeMethodIfExists(multiCameraView, "createVideoView", devId);
+                multiVideoViewCreated = true;
+            }
+
+            isMultiLiveMode = true;
+            return true;
+        } catch (Throwable t) {
+            Log.w("CAMERA", "Init ThingMultiCameraView failed, fallback to single view", t);
+            isMultiLiveMode = false;
+            return false;
+        }
+    }
+
+    private boolean invokeRegisterVideoPairs(HashMap<Integer, Integer> indexMap) {
+        if (multiCameraView == null) {
+            return false;
+        }
+        try {
+            java.lang.reflect.Method method = multiCameraView.getClass().getMethod("registerVideoViewIndexPairs", Map.class);
+            method.invoke(multiCameraView, indexMap);
+            return true;
+        } catch (Throwable ignore) {
+        }
+
+        boolean anyInvoked = false;
+        for (Map.Entry<Integer, Integer> entry : indexMap.entrySet()) {
+            Object ok = invokeMethodIfExists(multiCameraView, "registerVideoViewIndexPairs", entry.getKey(), entry.getValue());
+            if (ok != null) {
+                anyInvoked = true;
+            }
+        }
+        return anyInvoked;
+    }
+
+    private Object invokeNoArgMethodIfExists(Object target, String methodName) {
+        if (target == null) {
+            return null;
+        }
+        try {
+            java.lang.reflect.Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+    private Object invokeMethodIfExists(Object target, String methodName, Object... args) {
+        if (target == null) {
+            return null;
+        }
+        java.lang.reflect.Method[] methods = target.getClass().getMethods();
+        for (java.lang.reflect.Method method : methods) {
+            if (!method.getName().equals(methodName)) {
+                continue;
+            }
+            Class<?>[] paramTypes = method.getParameterTypes();
+            if (paramTypes.length != args.length) {
+                continue;
+            }
+            boolean match = true;
+            for (int i = 0; i < paramTypes.length; i++) {
+                Object arg = args[i];
+                if (arg == null) {
+                    continue;
+                }
+                Class<?> expected = wrapPrimitive(paramTypes[i]);
+                Class<?> actual = wrapPrimitive(arg.getClass());
+                if (!expected.isAssignableFrom(actual)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) {
+                continue;
+            }
+            try {
+                return method.invoke(target, args);
+            } catch (Throwable ignore) {
+            }
+        }
+        return null;
+    }
+
+    private Class<?> wrapPrimitive(Class<?> cls) {
+        if (!cls.isPrimitive()) {
+            return cls;
+        }
+        if (cls == int.class) return Integer.class;
+        if (cls == long.class) return Long.class;
+        if (cls == boolean.class) return Boolean.class;
+        if (cls == float.class) return Float.class;
+        if (cls == double.class) return Double.class;
+        if (cls == byte.class) return Byte.class;
+        if (cls == short.class) return Short.class;
+        if (cls == char.class) return Character.class;
+        return cls;
     }
 }

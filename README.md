@@ -304,6 +304,112 @@ AndroidView(
 )
 ```
 
+#### Android 多目分屏直播（ThingMultiCameraView）
+
+1. **构建平台视图参数**（开启多屏能力并可选地传入视图宽度用于分割协议计算）
+
+   ```dart
+   final params = TuyaFlutterHaSdk.buildCameraViewCreationParams(
+     deviceId: devId,
+     enableMultiLive: true,
+     cameraViewWidthPixels: MediaQuery.of(context).size.width.toInt(),
+   );
+
+   AndroidView(
+     viewType: 'tuya_camera_view',
+     creationParams: params,
+     creationParamsCodec: const StandardMessageCodec(),
+   );
+   ```
+
+2. **准备多屏直播并获取分割协议信息**
+
+   ```dart
+   final splitInfo = await TuyaFlutterHaSdk.prepareMultiLiveStream(
+     devId: devId,
+     widthPixels: params['cameraViewWidthPixels'] ?? 0,
+   );
+
+   if (splitInfo['support'] != true) {
+     // 设备不支持分割，走普通单画面逻辑
+     return;
+   }
+   ```
+
+3. **根据 split_info.index 绑定渲染视图与镜头 ID**
+
+   ```dart
+   final pairs = TuyaFlutterHaSdk.buildSplitIndexPairs([0, 1, 2]);
+   await TuyaFlutterHaSdk.registerVideoViewIndexPairs(
+     devId: devId,
+     pairs: pairs,
+   );
+   ```
+
+4. **后续直播流程** 同单画面：调用 `startPreview` / `stopPreview` / `connectP2P` 等接口即可，SDK 会在底层自动完成分屏渲染。
+
+> 注意：若 `support=true` 但 `multiViewPrepared=false`，说明当前 SDK 版本缺少 `ThingMultiCameraView`，此时保持单画面回退逻辑即可。
+
+#### iOS 多目分屏直播（ThingSmartCameraType）
+
+1. **创建平台视图 & ThingSmartCameraType 对象**（仍使用 `UiKitView`）：
+
+   ```dart
+   UiKitView(
+     viewType: 'tuya_camera_view',
+     creationParams: TuyaFlutterHaSdk.buildCameraViewCreationParams(
+       deviceId: devId,
+       enableMultiLive: true, // iOS 侧会根据该标记提前创建多目能力
+     ),
+     creationParamsCodec: const StandardMessageCodec(),
+   );
+   ```
+
+   iOS 原生会在 `TuyaCameraPlatformView` 初始化时：
+
+   - 通过 `ThingSmartCameraFactory.cameraWithP2PType:deviceId:delegate:` 创建 `ThingSmartCameraType`
+   - 读取 `camera.advancedConfig.isSupportedVideoSplitting`
+   - 如果支持，保持 `ThingSmartVideoViewIndexPair` 注册所需状态
+
+2. **准备多屏直播 / 检测能力**
+
+   ```dart
+   final info = await TuyaFlutterHaSdk.prepareMultiLiveStream(devId: devId);
+   if (info['support'] != true) {
+     // 回退单画面
+     return;
+   }
+   ```
+
+   iOS 侧会在原生内部：
+
+   - 检查 `advancedConfig.isSupportedVideoSplitting`
+   - 若支持则调用 `connectWithMode:.auto` + `startPreviewWithDefinition:`（默认当前清晰度）
+   - 返回 `support / connected / multiViewPrepared` 等标志
+
+3. **绑定渲染视图与镜头 ID**
+
+   ```dart
+   final pairs = TuyaFlutterHaSdk.buildSplitIndexPairs([0, 1, 2]);
+   await TuyaFlutterHaSdk.registerVideoViewIndexPairs(
+     devId: devId,
+     pairs: pairs,
+   );
+   ```
+
+   对应原生调用 `ThingSmartCameraType` 的 `registerVideoViewIndexPairs:`，若 SDK 缺少该类将自动退回 map 形式。
+
+4. **直播生命周期**
+
+   - `connectWithMode:` ➜ `ThingSmartCameraDelegate.cameraDidConnected:`
+   - `startPreviewWithDefinition:` ➜ `cameraDidBeginPreview:`
+   - `stopPreview` ➜ `cameraDidStopPreview:`
+   - `disConnect` ➜ `cameraDisconnected:specificErrorCode:`
+
+   Flutter 侧维持原有 API（`connectP2P` / `startPreview` / `stopPreview` / `disconnectP2P`），iOS 原生内部会桥接到上述接口。
+
+> 若 `isSupportedVideoSplitting` 为 `false`，请确认该设备产品已正确下发分割协议。否则 iOS 侧将保持单画面逻辑，`registerVideoViewIndexPairs` 会返回 `NOT_SUPPORTED`。
+
 ---
 
 ## 7. 常见问题（FAQ）

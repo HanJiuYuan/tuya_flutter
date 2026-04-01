@@ -618,6 +618,36 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
             cloudVideoDeviceId = nil
             result(nil)
 
+        // ────────────── 多目分屏直播能力准备
+        case "prepareMultiLiveStream":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "devId required",
+                                           details: nil))
+            }
+            let widthPixels = args["widthPixels"] as? Int ?? 0
+            tuyaCameraViewFactory?.prepareMultiLiveStream(devId: devId,
+                                                          widthPixels: widthPixels,
+                                                          result: result)
+
+        // ────────────── 多目分屏渲染视图与镜头索引绑定
+        case "registerVideoViewIndexPairs":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String,
+                let pairs = args["pairs"] as? [[String: Any]]
+            else {
+                return result(FlutterError(code: "MISSING_ARGS",
+                                           message: "devId and pairs required",
+                                           details: nil))
+            }
+            tuyaCameraViewFactory?.registerVideoViewIndexPairs(devId: devId,
+                                                               pairs: pairs,
+                                                               result: result)
+
     
         default: result("Check your method name")
             //default: result(FlutterMethodNotImplemented)
@@ -651,6 +681,7 @@ extension TuyaCameraPlugin: FlutterStreamHandler {
 // ───────────────────────── Native preview view (unchanged)
 class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
     private var tuyaCameraPlatformView: TuyaCameraPlatformView?
+    private var cameraViews: [String: TuyaCameraPlatformView] = [:]
     var definitionChangedCallback: ((Int) -> Void)?
     
     func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
@@ -663,7 +694,17 @@ class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
         let platformView=TuyaCameraPlatformView(frame: frame, deviceId: devId)
         platformView.definitionChangedCallback = self.definitionChangedCallback
         tuyaCameraPlatformView=platformView
+        if !devId.isEmpty {
+            cameraViews[devId] = platformView
+        }
         return platformView
+    }
+
+    private func targetView(devId: String) -> TuyaCameraPlatformView? {
+        if !devId.isEmpty, let byId = cameraViews[devId] {
+            return byId
+        }
+        return tuyaCameraPlatformView
     }
     func startCamera(){
         if(tuyaCameraPlatformView != nil){
@@ -756,15 +797,41 @@ class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
         }
         view.stopPlayback(result: result)
     }
+
+    func prepareMultiLiveStream(devId: String,
+                                widthPixels: Int,
+                                result: @escaping FlutterResult) {
+        guard let view = targetView(devId: devId) else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.prepareMultiLiveStream(widthPixels: widthPixels, result: result)
+    }
+
+    func registerVideoViewIndexPairs(devId: String,
+                                     pairs: [[String: Any]],
+                                     result: @escaping FlutterResult) {
+        guard let view = targetView(devId: devId) else {
+            result(FlutterError(code: "NO_CAMERA_VIEW",
+                                message: "TuyaCameraPlatformView is nil",
+                                details: nil))
+            return
+        }
+        view.registerVideoViewIndexPairs(pairs: pairs, result: result)
+    }
 }
 
 class TuyaCameraPlatformView:
     NSObject, FlutterPlatformView, ThingSmartCameraDelegate {
     
     private let container = UIView()
+    private var devId: String = ""
     private var camera   : ThingSmartCameraType!
     private var sdkView  : UIView?
     private var isMuted  : Bool = false
+    private var isSupportedVideoSplitting = false
     var definitionChangedCallback: ((Int) -> Void)?
     
     // 回放相关状态和回调
@@ -777,6 +844,7 @@ class TuyaCameraPlatformView:
     
     init(frame: CGRect, deviceId: String) {
         print("platformView init")
+        self.devId = deviceId
         super.init()
         container.frame = frame
         
@@ -794,6 +862,7 @@ class TuyaCameraPlatformView:
         }
         print(device.deviceModel.p2pType())
         camera = cam
+        isSupportedVideoSplitting = (cam.advancedConfig?.isSupportedVideoSplitting ?? false)
         if let v = cam.videoView() {
             v.frame = container.bounds
             v.autoresizingMask = [.flexibleWidth,.flexibleHeight]
@@ -981,6 +1050,120 @@ class TuyaCameraPlatformView:
         
         stopPlaybackResult = result
         camera.stopPlayback()
+    }
+
+    // MARK: - 多目分屏直播
+
+    func prepareMultiLiveStream(widthPixels: Int, result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+
+        let supported = camera.advancedConfig?.isSupportedVideoSplitting ?? false
+        isSupportedVideoSplitting = supported
+
+        var payload: [String: Any] = [
+            "devId": devId,
+            "support": supported,
+            "multiViewPrepared": supported,
+            "widthPixels": widthPixels
+        ]
+
+        if !supported {
+            result(payload)
+            return
+        }
+
+        camera.connect?(with: .auto)
+        camera.startPreview()
+        payload["connected"] = true
+        result(payload)
+    }
+
+    func registerVideoViewIndexPairs(pairs: [[String: Any]],
+                                     result: @escaping FlutterResult) {
+        guard camera != nil else {
+            result(FlutterError(code: "NO_CAMERA",
+                                message: "camera is nil",
+                                details: nil))
+            return
+        }
+        guard isSupportedVideoSplitting || (camera.advancedConfig?.isSupportedVideoSplitting ?? false) else {
+            result(FlutterError(code: "NOT_SUPPORTED",
+                                message: "Current stream does not support video splitting",
+                                details: nil))
+            return
+        }
+        if pairs.isEmpty {
+            result(FlutterError(code: "MISSING_ARGS",
+                                message: "pairs required",
+                                details: nil))
+            return
+        }
+
+        let callOK = invokeRegisterVideoViewIndexPairs(with: pairs)
+        if callOK {
+            result(nil)
+        } else {
+            result(FlutterError(code: "CALL_FAILED",
+                                message: "registerVideoViewIndexPairs failed in current iOS SDK",
+                                details: nil))
+        }
+    }
+
+    private func invokeRegisterVideoViewIndexPairs(with pairs: [[String: Any]]) -> Bool {
+        let selector = NSSelectorFromString("registerVideoViewIndexPairs:")
+        guard (camera as AnyObject).responds(to: selector) else {
+            return false
+        }
+
+        let pairObjects = makeVideoViewPairObjects(from: pairs)
+        let unmanaged = (camera as AnyObject).perform(selector, with: pairObjects)
+
+        // Objective-C BOOL 返回值在 Swift perform 下可能拿不到对象返回；
+        // 只要方法被成功调用（selector 存在且执行未崩溃），默认认为调用成功。
+        guard let value = unmanaged?.takeUnretainedValue() else {
+            return true
+        }
+        if let ok = value as? Bool {
+            return ok
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        return true
+    }
+
+    private func makeVideoViewPairObjects(from pairs: [[String: Any]]) -> NSArray {
+        let pairClass = NSClassFromString("ThingSmartVideoViewIndexPair") as? NSObject.Type
+        let list = NSMutableArray()
+
+        for pair in pairs {
+            let viewIndexNum = (pair["viewIndex"] as? NSNumber) ?? (pair["splitIndex"] as? NSNumber)
+            let cameraIndexNum =
+                (pair["cameraIndex"] as? NSNumber) ??
+                (pair["lensId"] as? NSNumber) ??
+                viewIndexNum
+
+            guard let viewIndex = viewIndexNum, let cameraIndex = cameraIndexNum else { continue }
+
+            if let cls = pairClass {
+                let obj = cls.init()
+                obj.setValue(viewIndex, forKey: "videoViewIndex")
+                obj.setValue(cameraIndex, forKey: "videoIndex")
+                list.add(obj)
+            } else {
+                list.add([
+                    "videoViewIndex": viewIndex,
+                    "videoIndex": cameraIndex
+                ])
+            }
+        }
+
+        return list
     }
     
     // MARK: - ThingSmartCameraDelegate 回放相关回调

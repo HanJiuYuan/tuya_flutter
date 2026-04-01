@@ -359,4 +359,30 @@ class TuyaCameraMethodChannel extends TuyaCameraPlatform {
   Future<void> setCloudVideoMute({required int mute}) async {
     await _channel.invokeMethod('setCloudVideoMute', {'mute': mute});
   }
+
+  @override
+  Future<Map<String, dynamic>> prepareMultiLiveStream({
+    required String devId,
+    int widthPixels = 0,
+  }) async {
+    final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'prepareMultiLiveStream',
+      {'devId': devId, 'widthPixels': widthPixels},
+    );
+    if (result == null) {
+      return <String, dynamic>{};
+    }
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<void> registerVideoViewIndexPairs({
+    required String devId,
+    required List<Map<String, dynamic>> pairs,
+  }) async {
+    await _channel.invokeMethod('registerVideoViewIndexPairs', {
+      'devId': devId,
+      'pairs': pairs,
+    });
+  }
 }

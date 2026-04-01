@@ -256,4 +256,26 @@ class TuyaCameraMethods {
   static Future<void> setCloudVideoMute({required int mute}) {
     return TuyaCameraPlatform.instance.setCloudVideoMute(mute: mute);
   }
+
+  /// 准备多目分屏直播，返回分割能力和分割协议信息
+  static Future<Map<String, dynamic>> prepareMultiLiveStream({
+    required String devId,
+    int widthPixels = 0,
+  }) {
+    return TuyaCameraPlatform.instance.prepareMultiLiveStream(
+      devId: devId,
+      widthPixels: widthPixels,
+    );
+  }
+
+  /// 绑定分屏渲染视图与镜头索引关系
+  static Future<void> registerVideoViewIndexPairs({
+    required String devId,
+    required List<Map<String, dynamic>> pairs,
+  }) {
+    return TuyaCameraPlatform.instance.registerVideoViewIndexPairs(
+      devId: devId,
+      pairs: pairs,
+    );
+  }
 }

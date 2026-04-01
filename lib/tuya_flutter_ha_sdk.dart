@@ -2231,4 +2231,79 @@ class TuyaFlutterHaSdk {
   static Future<void> setCloudVideoMute({required int mute}) {
     return TuyaCameraMethods.setCloudVideoMute(mute: mute);
   }
+
+  /// Build camera platform view params for `AndroidView` / `UiKitView`.
+  ///
+  /// When [enableMultiLive] is true (Android), native side will attempt to
+  /// initialize split-video multi-view rendering.
+  static Map<String, dynamic> buildCameraViewCreationParams({
+    required String deviceId,
+    bool enableMultiLive = false,
+    int cameraViewWidthPixels = 0,
+  }) {
+    return <String, dynamic>{
+      'deviceId': deviceId,
+      'enableMultiLive': enableMultiLive,
+      'cameraViewWidthPixels': cameraViewWidthPixels,
+    };
+  }
+
+  /// Prepare multi-live mode and fetch split capability/protocol info.
+  ///
+  /// Returns a map containing at least:
+  /// - `support`: bool
+  /// - `videoSplitInfoJson`: String?
+  /// - `multiViewPrepared`: bool? (when support is true)
+  static Future<Map<String, dynamic>> prepareMultiLiveStream({
+    required String devId,
+    int widthPixels = 0,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: 'INVALID_PARAMETER',
+        message: 'devId should be specified',
+      );
+    }
+    return TuyaCameraMethods.prepareMultiLiveStream(
+      devId: devId,
+      widthPixels: widthPixels,
+    );
+  }
+
+  /// Register split-view index bindings to camera lens IDs.
+  ///
+  /// Each item supports keys:
+  /// - `viewIndex` (required)
+  /// - `cameraIndex` (optional, defaults to viewIndex)
+  static Future<void> registerVideoViewIndexPairs({
+    required String devId,
+    required List<Map<String, dynamic>> pairs,
+  }) {
+    if (devId.isEmpty) {
+      throw PlatformException(
+        code: 'INVALID_PARAMETER',
+        message: 'devId should be specified',
+      );
+    }
+    if (pairs.isEmpty) {
+      throw PlatformException(
+        code: 'INVALID_PARAMETER',
+        message: 'pairs should be specified',
+      );
+    }
+    return TuyaCameraMethods.registerVideoViewIndexPairs(
+      devId: devId,
+      pairs: pairs,
+    );
+  }
+
+  /// Helper to create `registerVideoViewIndexPairs` payload by split indices.
+  ///
+  /// Example input: `[0, 1, 2]` ->
+  /// `[{viewIndex:0,cameraIndex:0}, {viewIndex:1,cameraIndex:1}, ...]`
+  static List<Map<String, int>> buildSplitIndexPairs(List<int> splitIndexes) {
+    return splitIndexes
+        .map((i) => <String, int>{'viewIndex': i, 'cameraIndex': i})
+        .toList();
+  }
 }
