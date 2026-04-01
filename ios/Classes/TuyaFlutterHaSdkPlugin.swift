@@ -47,28 +47,44 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
         return map
     }
 
-    private func firmwareModelToMap(_ model: ThingSmartFirmwareUpgradeModel) -> [String: Any] {
-        return [
-            "desc": model.desc ?? "",
-            "type": model.type,
-            "typeDesc": model.typeDesc ?? "",
-            "upgradeStatus": model.upgradeStatus,
-            "version": model.version ?? "",
-            "currentVersion": model.currentVersion ?? "",
-            "devType": model.devType,
-            "upgradeType": model.upgradeType,
-            "url": model.url ?? "",
-            "fileSize": model.fileSize ?? "",
-            "md5": model.md5 ?? "",
-            "controlType": model.controlType,
-            "waitingDesc": model.waitingDesc ?? "",
-            "upgradingDesc": model.upgradingDesc ?? "",
-            "canUpgrade": model.canUpgrade as Any,
-            "remind": model.remind ?? "",
-            "upgradeMode": model.upgradeMode.rawValue
+   private func firmwareModelToMap(_ model: ThingSmartFirmwareUpgradeModel) -> [String: Any] {
+    return [
+        "desc": model.desc ?? "",
+        "type": model.type,
+        "typeDesc": model.typeDesc ?? "",
+        "upgradeStatus": model.upgradeStatus.rawValue, 
+        "version": model.version ?? "",
+        "currentVersion": model.currentVersion ?? "",
+        "devType": model.devType,
+        "upgradeType": model.upgradeType,
+        "url": model.url ?? "",
+        "fileSize": model.fileSize ?? "",
+        "md5": model.md5 ?? "",
+        "controlType": model.controlType,
+        "waitingDesc": model.waitingDesc ?? "",
+        "upgradingDesc": model.upgradingDesc ?? "",
+        "canUpgrade": model.canUpgrade,
+        "remind": model.remind ?? "",
+        "upgradeMode": model.upgradeMode.rawValue
+    ]
+    }
+    private func deviceModelToMap(_ dev: ThingSmartDeviceModel) -> [String: Any] {
+        return[
+            "devId": dev.devId ?? "",
+            "name": dev.name ?? "",
+            "productId": dev.productId ?? "",
+            "uuid": dev.uuid ?? "",
+            "iconUrl": dev.iconUrl ?? "",
+            "isOnline": dev.isOnline,             // 在线状态
+            "isCloudOnline": dev.isCloudOnline,   // 云端在线状态
+            "homeId": dev.homeId,                 // 家庭 ID
+            "roomId": dev.roomId,                 // 房间 ID
+            "bv": "\(dev.bv)",                    // 固件基线版本 (Base Version)
+            "pv": "\(dev.pv)",                    // 协议版本 (Protocol Version)
+            "verSw": dev.verSw ?? "",             // 软件版本号 (Software Version)
+            "dps": dev.dps ?? [:]                 // 数据点状态点 (DPs)
         ]
     }
-
     private func firmwareStatusToMap(_ status: ThingSmartFirmwareUpgradeStatusModel) -> [String: Any] {
         var map: [String: Any] = [
             "upgradeStatus": status.upgradeStatus.rawValue,
@@ -394,7 +410,7 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
             device.checkFirmwareUpgrade({ firmwares in
                 let candidates: [ThingSmartFirmwareUpgradeModel]
                 if requestFirmwares.isEmpty {
-                    candidates = firmwares.filter { $0.upgradeStatus == 1 }
+                    candidates = firmwares.filter { $0.upgradeStatus.rawValue == 1 }
                 } else {
                     let targets = requestFirmwares.compactMap { item -> String? in
                         guard let type = item["type"] else { return nil }
@@ -448,7 +464,7 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
                 return
             }
-            device.cancelFirmwareUpgrade(success: {
+            device.cancelFirmwareUpgrade({
                 result(nil)
             }, failure: { error in
                 let nsError = error as NSError?
@@ -515,7 +531,7 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
                 return
             }
-            device.memberCheckFirmwareStatus(success: { infos in
+            device.memberCheckFirmwareStatus({ infos in
                 let list = infos.map { self.memberFirmwareInfoToMap($0) }
                 result(list)
             }, failure: { error in
@@ -680,8 +696,6 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
             )
             
         case "getHomeDevices":
-            // getDataWithSuccess function of Tuya SDK is called
-            // and then deviceList items are returned
             guard let args = call.arguments as? [String: Any],
                   let homeId = args["homeId"] as? Int else {
                 result(FlutterError(code: "MISSING_ARGS", message: "homeId required", details: nil))
@@ -689,34 +703,11 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
             }
             let home = ThingSmartHome(homeId: Int64(homeId))
             home?.getDataWithSuccess({ homeModel in
-                // Access devices using: home?.deviceList
-                var devices = [[String: Any]]()
-                home?.deviceList.forEach { deviceModel in
-                    devices.append(deviceToDict(deviceModel))
-                }
+                let devices = home?.deviceList.map { self.deviceModelToMap($0) } ?? []
                 result(devices)
             }, failure: { error in
-                let msg = error?.localizedDescription ?? "Unknown error"
-                result(FlutterError(code: "GET_HOME_DEVICES_FAILED", message: msg, details: nil))
+                result(FlutterError(code: "GET_FAILED", message: error?.localizedDescription, details: nil))
             })
-            
-            // Helper function (outside the case):
-            func deviceToDict(_ device: Any?) -> [String: Any] {
-                guard let dev = device as? ThingSmartDeviceModel else { return [:] }
-                return [
-                    "devId": dev.devId ?? "",
-                    "name": dev.name ?? "",
-                    "productId": dev.productId ?? "",
-                    "uuid": dev.uuid ?? "",
-                    "iconUrl": dev.iconUrl ?? "",
-                    "isOnline": dev.isOnline,
-                    "isCloudOnline": dev.isCloudOnline,
-                    "homeId": dev.homeId,
-                    "roomId": dev.roomId,
-                    // Remove or comment out timeZoneId if not present
-                    //"timeZone": dev.timeZone ?? "",
-                ]
-            }
             
             // ── Device Pairing Methods ───────────────────────────────────────────────────
         case "discoverDeviceInfo":
@@ -890,77 +881,36 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
             device!.delegate = self
             result(nil)
         case "queryDeviceInfo":
-            // Query basic device info / DP info. For iOS we keep behavior
-            // close to Android: on certain DP-type errors we just return nil
-            // instead of surfacing a PlatformException to Flutter.
-            guard let args = call.arguments as? [String: Any],
-                  let devId = args["devId"] as? String
-            else {
-                result(FlutterError(code: "MISSING_ARGS",
-                                    message: "devId required",
-                                    details: nil))
+            // 1. 获取参数
+            guard let infoArgs = call.arguments as? [String: Any],
+                  let idStr = infoArgs["devId"] as? String else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId req", details: nil))
                 return
             }
 
-            device = ThingSmartDevice(deviceId: devId)
-            if device == nil {
-                print("device is nil")
-                result(FlutterError(code: "DEVICE_INIT_FAILED",
-                                    message: "device is nil",
-                                    details: nil))
-                return
-            }
-
-            let queryDpInfo: [String: Any] = [
-                "1": NSNull()
-            ]
-
-            device?.publishDps(queryDpInfo, mode: ThingDevicePublishModeAuto, success: {
-                // 返回我们构造的查询 map，Dart 侧会把它当作 Map<String, dynamic>
-                result(queryDpInfo)
-            }, failure: { error in
-                // 为避免在 Flutter 侧看到 PlatformException，这里统一返回 nil，
-                // 由 Dart 侧按 "无设备信息" 处理即可（与 Android read-only 行为更接近）。
-                if let nsError = error as NSError? {
-                    print("[Tuya][queryDeviceInfo] publishDps failed: code=\(nsError.code), msg=\(nsError.localizedDescription)")
-                } else if let error = error {
-                    print("[Tuya][queryDeviceInfo] publishDps failed: \(error.localizedDescription)")
-                } else {
-                    print("[Tuya][queryDeviceInfo] publishDps failed: unknown error")
-                }
-                result(nil)
-            })
-        case "renameDevice":
-            //updateName function of Tuya SDK called
-            guard let args = call.arguments as? [String: Any],
-                  let devId      = args["devId"] as? String,
-                  let name      = args["name"] as? String
+            // 2. 明确初始化，直接传入 idStr
+            // 使用带类型的完整初始化路径
+            if let tempDeviceInstance = ThingSmartDevice(deviceId: idStr) {
+                
+                let m = tempDeviceInstance.deviceModel
+                
+                // 3. 判断 model 是否包含数据
+                if m.devId != nil {
+                    // 这里调用我们改好的 deviceModelToMap
+                    let finalMap = self.deviceModelToMap(m)
                     
-            else {
-                result(FlutterError(code: "MISSING_ARGS",
-                                    message: "devId required",
-                                    details: nil))
-                return
-            }
-            device=ThingSmartDevice(deviceId: devId)
-            if (device == nil) {
-                print("device is nil")
-                result(FlutterError(code: "Thing Smart device ",
-                                    message: "device is nil",
-                                    details: nil))
-                return
-            }
-            device?.updateName(name, success: {
+                    // 打印调试
+                    let currentBv = finalMap["bv"] as? String ?? "N/A"
+                    print("Successfully matched device: \(idStr), Version: \(currentBv)")
+                    
+                    result(finalMap)
+                } else {
+                    print("Model is empty for devId: \(idStr)")
+                    result(nil)
+                }
+            } else {
                 result(nil)
-            }, failure: { (error) in
-                let msg = (error as NSError?)?.localizedDescription
-                ?? "Unknown error"
-                result(FlutterError(
-                    code: "( (error as NSError?)?.code ?? -1 )",
-                    message: msg,
-                    details: nil
-                ))
-            })
+            }
         case "removeDevice":
             //remove function of Tuya SDK called
             guard let args = call.arguments as? [String: Any],
@@ -1553,12 +1503,12 @@ extension TuyaFlutterHaSdkPlugin: ThingSmartDeviceDelegate {
         print(" Device Info Update")
         self.pairingEventSink?(device.deviceModel.dps)
     }
-    func device(_ device: ThingSmartDevice!, signal: String!) {
+    public func device(_ device: ThingSmartDevice!, signal: String!) {
         print(" signal : \(signal)")
         self.pairingEventSink?(signal)
     }
 
-    func device(_ device: ThingSmartDevice, otaUpdateStatusChanged statusModel: ThingSmartFirmwareUpgradeStatusModel) {
+    public func device(_ device: ThingSmartDevice, otaUpdateStatusChanged statusModel: ThingSmartFirmwareUpgradeStatusModel) {
         self.pairingEventSink?([
             "event": "otaUpdateStatusChanged",
             "devId": device.deviceModel.devId ?? "",

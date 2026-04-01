@@ -1046,6 +1046,7 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
 class TuyaCameraViewFactory extends PlatformViewFactory {
     TuyaCameraPlatformView tuyaCameraPlatformView;
     private EventSink eventSink;
+    private final HashMap<String, TuyaCameraPlatformView> cameraViews = new HashMap<>();
 
     TuyaCameraViewFactory() {
         super(StandardMessageCodec.INSTANCE);
@@ -1056,12 +1057,23 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
         if (tuyaCameraPlatformView != null) {
             tuyaCameraPlatformView.setEventSink(eventSink);
         }
+        for (TuyaCameraPlatformView v : cameraViews.values()) {
+            v.setEventSink(eventSink);
+        }
+    }
+
+    public TuyaCameraPlatformView getViewForDevice(String devId) {
+        return cameraViews.get(devId);
     }
 
     @Override
     public PlatformView create(@NonNull Context context, int id, @Nullable Object args) {
         final Map<String, Object> creationParams = (Map<String, Object>) args;
         tuyaCameraPlatformView = new TuyaCameraPlatformView(context, id, creationParams, eventSink);
+        String viewDevId = creationParams != null ? (String) creationParams.get("deviceId") : null;
+        if (viewDevId != null && !viewDevId.isEmpty()) {
+            cameraViews.put(viewDevId, tuyaCameraPlatformView);
+        }
         return tuyaCameraPlatformView;
     }
 
@@ -1378,6 +1390,7 @@ class TuyaCameraPlatformView implements PlatformView {
         mainHandler.post(() -> {
             try {
                 Map<String, Object> event = new HashMap<>();
+                data.put("devId", devId);
                 event.put(eventType, data);
                 eventSink.success(event);
                 Log.i("CAMERA", "✅ 发送事件到 Flutter: " + eventType + ", data: " + data);
