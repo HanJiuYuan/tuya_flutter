@@ -1410,9 +1410,521 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     message: err?.localizedDescription ?? "error",
                                     details:nil))
             })
+
+        // Share one or more devices to a user and overwrite previous shares
+        case "addShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let homeId = args["homeId"] as? Int,
+                let countryCode = args["countryCode"] as? String,
+                let userAccount = args["userAccount"] as? String,
+                let devIds = args["devIds"] as? [String]
+            else {
+                result(FlutterError(code: "MISSING_ARGS",
+                                    message: "homeId, countryCode, userAccount, devIds required",
+                                    details: nil))
+                return
+            }
+            let meshIds = args["meshIds"] as? [String] ?? []
+            let autoSharing = args["autoSharing"] as? Bool ?? false
+            let shareBean = ThingShareIdBean()
+            shareBean.devIds = devIds
+            shareBean.meshIds = meshIds
+            ThingHomeSdk.getDeviceShareInstance().addShare(
+                Int64(homeId),
+                countryCode: countryCode,
+                userAccount: userAccount,
+                bean: shareBean,
+                autoSharing: autoSharing,
+                success: { sharedUser in
+                    result(self.sharedUserInfoBeanToMap(sharedUser))
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Share devices to a user by member ID (append)
+        case "addShareWithMemberId":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int,
+                let devIds = args["devIds"] as? [String]
+            else {
+                result(FlutterError(code: "MISSING_ARGS",
+                                    message: "memberId, devIds required",
+                                    details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().addShare(
+                withMemberId: Int64(memberId),
+                devIds: devIds,
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Share devices to a user by homeId + account (append)
+        case "addShareWithHomeId":
+            guard
+                let args = call.arguments as? [String: Any],
+                let homeId = args["homeId"] as? Int,
+                let countryCode = args["countryCode"] as? String,
+                let userAccount = args["userAccount"] as? String,
+                let devIds = args["devIds"] as? [String]
+            else {
+                result(FlutterError(code: "MISSING_ARGS",
+                                    message: "homeId, countryCode, userAccount, devIds required",
+                                    details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().addShare(
+                withHomeId: Int64(homeId),
+                countryCode: countryCode,
+                userAccount: userAccount,
+                devIds: devIds,
+                success: { sharedUser in
+                    result(self.sharedUserInfoBeanToMap(sharedUser))
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query the list of users to whom current user has shared devices
+        case "queryUserShareList":
+            guard
+                let args = call.arguments as? [String: Any],
+                let homeId = args["homeId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "homeId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().queryUserShareList(
+                Int64(homeId),
+                success: { list in
+                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
+                    result(mapped)
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query all users from whom current user has received shared devices
+        case "queryShareReceivedUserList":
+            ThingHomeSdk.getDeviceShareInstance().queryShareReceivedUserList(
+                success: { list in
+                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
+                    result(mapped)
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query share details sent by current user to member
+        case "getUserShareInfo":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().getUserShareInfo(
+                Int64(memberId),
+                success: { detail in
+                    result(self.shareSentUserDetailBeanToMap(detail))
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query share details received from a specific member
+        case "getReceivedShareInfo":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().getReceivedShareInfo(
+                Int64(memberId),
+                success: { detail in
+                    result(self.shareReceivedUserDetailBeanToMap(detail))
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query the list of users who have been shared a specific device
+        case "queryDevShareUserList":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().queryDevShareUserList(
+                devId,
+                success: { list in
+                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
+                    result(mapped)
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query the source of a shared device (who shared it to current user)
+        case "queryShareDevFromInfo":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().queryShareDevFromInfo(
+                devId,
+                success: { sharedUser in
+                    result(self.sharedUserInfoBeanToMap(sharedUser))
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Remove all share relationships with a user (as initiator)
+        case "removeUserShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().removeUserShare(
+                Int64(memberId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Remove all received share relationships with a user (as receiver)
+        case "removeReceivedUserShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().removeReceivedUserShare(
+                Int64(memberId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Remove a specific device from active share with a user
+        case "disableDevShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String,
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId, memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().disableDevShare(
+                devId,
+                memberId: Int64(memberId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Remove a received shared device
+        case "removeReceivedDevShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().removeReceivedDevShare(
+                devId,
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Rename the nickname/note for a user you have shared devices with
+        case "renameShareNickname":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int,
+                let name = args["name"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId, name required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().renameShareNickname(
+                Int64(memberId),
+                name: name,
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Rename the nickname/note for a user who shared devices with you
+        case "renameReceivedShareNickname":
+            guard
+                let args = call.arguments as? [String: Any],
+                let memberId = args["memberId"] as? Int,
+                let name = args["name"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "memberId, name required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().renameReceivedShareNickname(
+                Int64(memberId),
+                name: name,
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Send a device share invitation (returns share ID)
+        case "inviteShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let devId = args["devId"] as? String,
+                let userAccount = args["userAccount"] as? String,
+                let countryCode = args["countryCode"] as? String
+            else {
+                result(FlutterError(code: "MISSING_ARGS",
+                                    message: "devId, userAccount, countryCode required",
+                                    details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().inviteShare(
+                devId,
+                userAccount: userAccount,
+                countryCode: countryCode,
+                success: { shareId in
+                    result(shareId)
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Confirm a share invitation by share ID
+        case "confirmShareInvite":
+            guard
+                let args = call.arguments as? [String: Any],
+                let shareId = args["shareId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "shareId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().confirmShareInviteShare(
+                Int32(shareId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Query the list of users who are sharing a specific group
+        case "queryGroupSharedUserList":
+            guard
+                let args = call.arguments as? [String: Any],
+                let groupId = args["groupId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "groupId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().queryGroupSharedUserList(
+                Int64(groupId),
+                success: { list in
+                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
+                    result(mapped)
+                },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Share a group with a user
+        case "addShareUserForGroup":
+            guard
+                let args = call.arguments as? [String: Any],
+                let homeId = args["homeId"] as? Int,
+                let countryCode = args["countryCode"] as? String,
+                let userAccount = args["userAccount"] as? String,
+                let groupId = args["groupId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS",
+                                    message: "homeId, countryCode, userAccount, groupId required",
+                                    details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().addShareUser(
+                forGroup: Int64(homeId),
+                countryCode: countryCode,
+                userAccount: userAccount,
+                groupId: Int64(groupId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
+        // Remove a member from a group share
+        case "removeGroupShare":
+            guard
+                let args = call.arguments as? [String: Any],
+                let groupId = args["groupId"] as? Int,
+                let memberId = args["memberId"] as? Int
+            else {
+                result(FlutterError(code: "MISSING_ARGS", message: "groupId, memberId required", details: nil))
+                return
+            }
+            ThingHomeSdk.getDeviceShareInstance().removeGroupShare(
+                Int64(groupId),
+                memberId: Int64(memberId),
+                success: { result(nil) },
+                failure: { error in
+                    let nsErr = error as NSError?
+                    result(FlutterError(code: String(nsErr?.code ?? -1),
+                                        message: nsErr?.localizedDescription ?? "Unknown error",
+                                        details: nil))
+                }
+            )
+
         default:
             result(FlutterMethodNotImplemented)
         }
+    }
+
+    // MARK: – Share Helper Methods
+
+    private func sharedUserInfoBeanToMap(_ bean: ThingSharedUserInfoBean?) -> [String: Any] {
+        guard let b = bean else { return [:] }
+        return [
+            "memberId": b.memberId,
+            "headPic": b.headPic ?? "",
+            "name": b.name ?? "",
+            "remarkName": b.remarkName ?? "",
+            "shareDevList": (b.shareDevList ?? []).map { dev -> [String: Any] in
+                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
+            }
+        ]
+    }
+
+    private func shareSentUserDetailBeanToMap(_ bean: ThingShareSentUserDetailBean?) -> [String: Any] {
+        guard let b = bean else { return [:] }
+        var map: [String: Any] = [
+            "memberId": b.memberId,
+            "headPic": b.headPic ?? "",
+            "name": b.name ?? "",
+            "remarkName": b.remarkName ?? ""
+        ]
+        if let devList = b.devList {
+            map["devList"] = devList.map { dev -> [String: Any] in
+                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
+            }
+        }
+        return map
+    }
+
+    private func shareReceivedUserDetailBeanToMap(_ bean: ThingShareReceivedUserDetailBean?) -> [String: Any] {
+        guard let b = bean else { return [:] }
+        var map: [String: Any] = [
+            "memberId": b.memberId,
+            "headPic": b.headPic ?? "",
+            "name": b.name ?? "",
+            "remarkName": b.remarkName ?? ""
+        ]
+        if let devList = b.devList {
+            map["devList"] = devList.map { dev -> [String: Any] in
+                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
+            }
+        }
+        return map
     }
 }
 

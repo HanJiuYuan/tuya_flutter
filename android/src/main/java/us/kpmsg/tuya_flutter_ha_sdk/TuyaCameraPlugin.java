@@ -355,22 +355,25 @@ public class TuyaCameraPlugin implements FlutterPlugin, MethodChannel.MethodCall
                 result.success(null);
                 break;
             case "disconnectP2P":
+                String disconnectDevId = call.argument("devId");
                 if (tuyaCameraViewFactory != null) {
-                    tuyaCameraViewFactory.disconnectP2P();
+                    tuyaCameraViewFactory.disconnectP2P(disconnectDevId);
                 }
                 result.success(null);
                 break;
             case "startPreview":
                 Number clarity = call.argument("clarity");
                 int clarityValue = clarity != null ? clarity.intValue() : 0;
+                String startPreviewDevId = call.argument("devId");
                 if (tuyaCameraViewFactory != null) {
-                    tuyaCameraViewFactory.startPreview(clarityValue);
+                    tuyaCameraViewFactory.startPreview(startPreviewDevId, clarityValue);
                 }
                 result.success(null);
                 break;
             case "stopPreview":
+                String stopPreviewDevId = call.argument("devId");
                 if (tuyaCameraViewFactory != null) {
-                    tuyaCameraViewFactory.stopPreview();
+                    tuyaCameraViewFactory.stopPreview(stopPreviewDevId);
                 }
                 result.success(null);
                 break;
@@ -1071,6 +1074,7 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
     TuyaCameraPlatformView tuyaCameraPlatformView;
     private EventSink eventSink;
     private final HashMap<String, TuyaCameraPlatformView> cameraViews = new HashMap<>();
+    private final HashMap<String, IThingSmartCameraP2P> sharedP2PByDevId = new HashMap<>();
 
     TuyaCameraViewFactory() {
         super(StandardMessageCodec.INSTANCE);
@@ -1090,10 +1094,20 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
         return cameraViews.get(devId);
     }
 
+    private TuyaCameraPlatformView resolveTargetView(String devId) {
+        if (devId != null && !devId.isEmpty()) {
+            TuyaCameraPlatformView target = cameraViews.get(devId);
+            if (target != null) {
+                return target;
+            }
+        }
+        return tuyaCameraPlatformView;
+    }
+
     @Override
     public PlatformView create(@NonNull Context context, int id, @Nullable Object args) {
         final Map<String, Object> creationParams = (Map<String, Object>) args;
-        tuyaCameraPlatformView = new TuyaCameraPlatformView(context, id, creationParams, eventSink);
+        tuyaCameraPlatformView = new TuyaCameraPlatformView(context, id, creationParams, eventSink, sharedP2PByDevId);
         String viewDevId = creationParams != null ? (String) creationParams.get("deviceId") : null;
         if (viewDevId != null && !viewDevId.isEmpty()) {
             cameraViews.put(viewDevId, tuyaCameraPlatformView);
@@ -1114,26 +1128,30 @@ class TuyaCameraViewFactory extends PlatformViewFactory {
     }
 
     public void connectP2P(String devId) {
-        if (tuyaCameraPlatformView != null) {
-            tuyaCameraPlatformView.connectP2P(devId);
+        TuyaCameraPlatformView targetView = resolveTargetView(devId);
+        if (targetView != null) {
+            targetView.connectP2P(devId);
         }
     }
 
-    public void disconnectP2P() {
-        if (tuyaCameraPlatformView != null) {
-            tuyaCameraPlatformView.disconnectP2P();
+    public void disconnectP2P(String devId) {
+        TuyaCameraPlatformView targetView = resolveTargetView(devId);
+        if (targetView != null) {
+            targetView.disconnectP2P();
         }
     }
 
-    public void startPreview(int clarity) {
-        if (tuyaCameraPlatformView != null) {
-            tuyaCameraPlatformView.startPreview(clarity);
+    public void startPreview(String devId, int clarity) {
+        TuyaCameraPlatformView targetView = resolveTargetView(devId);
+        if (targetView != null) {
+            targetView.startPreview(clarity);
         }
     }
 
-    public void stopPreview() {
-        if (tuyaCameraPlatformView != null) {
-            tuyaCameraPlatformView.stopPreview();
+    public void stopPreview(String devId) {
+        TuyaCameraPlatformView targetView = resolveTargetView(devId);
+        if (targetView != null) {
+            targetView.stopPreview();
         }
     }
 
@@ -1281,6 +1299,7 @@ class TuyaCameraPlatformView implements PlatformView {
     private String videoSplitInfoJson = null;
     private Object videoSplitInfoModel = null;
     private boolean isTalking = false;
+    private final HashMap<String, IThingSmartCameraP2P> sharedP2PByDevId;
 
     public ThingCameraView getCameraView() {
         return cameraView;
@@ -1293,9 +1312,11 @@ class TuyaCameraPlatformView implements PlatformView {
     // 当前视频清晰度
     private int videoClarity = ICameraP2P.HD;
 
-    TuyaCameraPlatformView(Context context, int id, Map<String, Object> creationParams, EventSink eventSink) {
+    TuyaCameraPlatformView(Context context, int id, Map<String, Object> creationParams, EventSink eventSink,
+                           HashMap<String, IThingSmartCameraP2P> sharedP2PByDevId) {
         this.eventSink = eventSink;
         this.mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        this.sharedP2PByDevId = sharedP2PByDevId;
 
         // PlatformView 创建时标记为前台（仿照官方 demo，用于调试）
         try {
@@ -1315,8 +1336,18 @@ class TuyaCameraPlatformView implements PlatformView {
 
         IThingIPCCore cameraInstance = ThingIPCSdk.getCameraInstance();
         if (cameraInstance != null) {
-            // 1. 创建 P2P 相机实例（与官方 CameraPanelActivity 中 initData 一致）
-            mCameraP2P = cameraInstance.createCameraP2P(devId);
+            // 1. 创建 P2P 相机实例
+            if (devId != null && !devId.isEmpty() && this.sharedP2PByDevId != null) {
+                mCameraP2P = this.sharedP2PByDevId.get(devId);
+            }
+            if (mCameraP2P == null) {
+                mCameraP2P = cameraInstance.createCameraP2P(devId);
+                if (mCameraP2P != null && devId != null && !devId.isEmpty() && this.sharedP2PByDevId != null) {
+                    this.sharedP2PByDevId.put(devId, mCameraP2P);
+                }
+            } else {
+                Log.i("CAMERA", "Reuse cached P2P instance for devId=" + devId);
+            }
 
             // 2. 创建并初始化 ThingCameraView，作为视频渲染 View
             view = LayoutInflater.from(context).inflate(R.layout.camera_video_view, null);
@@ -1421,24 +1452,19 @@ class TuyaCameraPlatformView implements PlatformView {
             Log.w("CAMERA", "ThingUtil.setAppForeground(false) failed", t);
         }
 
-        // 释放 P2P 资源（直接调用 disconnect/destroy）
+        // 平台视图重建（如双击放大切布局）时，不主动断开/销毁 P2P，避免视频中断。
+        // 真正断开由显式 disconnectP2P 流程触发。
         try {
             if (mCameraP2P != null) {
                 try {
                     mCameraP2P.removeOnP2PCameraListener();
                 } catch (Exception ignore) {}
-                try {
-                    mCameraP2P.disconnect(new OperationDelegateCallBack() {
-                        @Override
-                        public void onSuccess(int sessionId, int requestId, String data) { }
-
-                        @Override
-                        public void onFailure(int sessionId, int requestId, int errCode) { }
-                    });
-                } catch (Exception ignore) {}
-                try {
-                    mCameraP2P.destroyP2P();
-                } catch (Exception ignore) {}
+            }
+            if (cameraView != null) {
+                invokeMethodIfExists(cameraView, "onDestroy");
+            }
+            if (multiCameraView != null) {
+                invokeMethodIfExists(multiCameraView, "onDestroy");
             }
         } catch (Exception e) {
             Log.e("CAMERA", "⚠️ dispose 中释放 P2P 资源异常: " + e.getMessage(), e);

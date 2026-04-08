@@ -82,18 +82,21 @@ class TuyaCameraMethods {
   }
 
   /// 断开 P2P 连接
-  static Future<void> disconnectP2P() {
-    return TuyaCameraPlatform.instance.disconnectP2P();
+  static Future<void> disconnectP2P({String? devId}) {
+    return TuyaCameraPlatform.instance.disconnectP2P(devId: devId);
   }
 
   /// 开始预览（清晰度：2=标清，4=高清）
-  static Future<void> startPreview({required int clarity}) {
-    return TuyaCameraPlatform.instance.startPreview(clarity: clarity);
+  static Future<void> startPreview({required int clarity, String? devId}) {
+    return TuyaCameraPlatform.instance.startPreview(
+      clarity: clarity,
+      devId: devId,
+    );
   }
 
   /// 停止预览
-  static Future<void> stopPreview() {
-    return TuyaCameraPlatform.instance.stopPreview();
+  static Future<void> stopPreview({String? devId}) {
+    return TuyaCameraPlatform.instance.stopPreview(devId: devId);
   }
 
   /// 设置实时预览清晰度（2=标清，4=高清）

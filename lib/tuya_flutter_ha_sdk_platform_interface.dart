@@ -352,4 +352,102 @@ abstract class TuyaFlutterHaSdkPlatform extends PlatformInterface {
   Future<List<Map<String, dynamic>>> memberCheckFirmwareStatus({
     required String devId,
   });
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Device Share
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  /// Share one or more devices to a user (overwrite previous shares for that user).
+  Future<Map<String, dynamic>> addShare({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+    List<String>? meshIds,
+    bool autoSharing = false,
+  });
+
+  /// Share devices to a user by member ID (append).
+  Future<void> addShareWithMemberId({
+    required int memberId,
+    required List<String> devIds,
+  });
+
+  /// Share devices to a user by homeId + account (append).
+  Future<Map<String, dynamic>> addShareWithHomeId({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+  });
+
+  /// Query the list of users to whom the current user has shared devices (active shares).
+  Future<List<Map<String, dynamic>>> queryUserShareList({required int homeId});
+
+  /// Query all users from whom the current user has received shared devices.
+  Future<List<Map<String, dynamic>>> queryShareReceivedUserList();
+
+  /// Query share info for a specific member (sent by current user).
+  Future<Map<String, dynamic>> getUserShareInfo({required int memberId});
+
+  /// Query shares received from a specific member.
+  Future<Map<String, dynamic>> getReceivedShareInfo({required int memberId});
+
+  /// Query users who share a specific device.
+  Future<List<Map<String, dynamic>>> queryDevShareUserList({
+    required String devId,
+  });
+
+  /// Query the source of a shared device (who shared it to me).
+  Future<Map<String, dynamic>> queryShareDevFromInfo({required String devId});
+
+  /// Remove all share relationships with a user (as the share initiator).
+  Future<void> removeUserShare({required int memberId});
+
+  /// Remove all received share relationships with a user (as the share receiver).
+  Future<void> removeReceivedUserShare({required int memberId});
+
+  /// Remove a specific device from the active share with a user.
+  Future<void> disableDevShare({required String devId, required int memberId});
+
+  /// Remove a received shared device.
+  Future<void> removeReceivedDevShare({required String devId});
+
+  /// Rename the note/nickname for a user you have shared devices with.
+  Future<void> renameShareNickname({
+    required int memberId,
+    required String name,
+  });
+
+  /// Rename the note/nickname for a user who shared devices with you.
+  Future<void> renameReceivedShareNickname({
+    required int memberId,
+    required String name,
+  });
+
+  /// Invite another user to share a device.
+  Future<int> inviteShare({
+    required String devId,
+    required String userAccount,
+    required String countryCode,
+  });
+
+  /// Confirm a share invitation by shareId.
+  Future<void> confirmShareInvite({required int shareId});
+
+  /// Query share users for a group.
+  Future<List<Map<String, dynamic>>> queryGroupSharedUserList({
+    required int groupId,
+  });
+
+  /// Share a group with a user.
+  Future<void> addShareUserForGroup({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required int groupId,
+  });
+
+  /// Remove a member from a group share.
+  Future<void> removeGroupShare({required int groupId, required int memberId});
 }

@@ -142,23 +142,26 @@ class TuyaCameraMethodChannel extends TuyaCameraPlatform {
   /// 断开 P2P 连接
   /// disconnectP2P function of native is invoked
   @override
-  Future<void> disconnectP2P() async {
-    await _channel.invokeMethod('disconnectP2P');
+  Future<void> disconnectP2P({String? devId}) async {
+    await _channel.invokeMethod('disconnectP2P', {'devId': devId});
   }
 
   /// 开始预览
   /// [clarity] 清晰度：2=标清，4=高清
   /// startPreview function of native is invoked
   @override
-  Future<void> startPreview({required int clarity}) async {
-    await _channel.invokeMethod('startPreview', {'clarity': clarity});
+  Future<void> startPreview({required int clarity, String? devId}) async {
+    await _channel.invokeMethod('startPreview', {
+      'clarity': clarity,
+      'devId': devId,
+    });
   }
 
   /// 停止预览
   /// stopPreview function of native is invoked
   @override
-  Future<void> stopPreview() async {
-    await _channel.invokeMethod('stopPreview');
+  Future<void> stopPreview({String? devId}) async {
+    await _channel.invokeMethod('stopPreview', {'devId': devId});
   }
 
   /// 设置实时预览清晰度

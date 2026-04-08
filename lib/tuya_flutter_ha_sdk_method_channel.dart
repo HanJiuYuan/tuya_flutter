@@ -872,4 +872,258 @@ class MethodChannelTuyaFlutterHaSdk extends TuyaFlutterHaSdkPlatform {
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
   }
+
+  /// Share one or more devices to a user and overwrite previous shares for that user.
+  @override
+  Future<Map<String, dynamic>> addShare({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+    List<String>? meshIds,
+    bool autoSharing = false,
+  }) async {
+    final result = await methodChannel
+        .invokeMethod<Map<dynamic, dynamic>>('addShare', <String, dynamic>{
+          'homeId': homeId,
+          'countryCode': countryCode,
+          'userAccount': userAccount,
+          'devIds': devIds,
+          'meshIds': meshIds ?? [],
+          'autoSharing': autoSharing,
+        });
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Share devices to a user by member ID (append to existing shares).
+  @override
+  Future<void> addShareWithMemberId({
+    required int memberId,
+    required List<String> devIds,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'addShareWithMemberId',
+      <String, dynamic>{'memberId': memberId, 'devIds': devIds},
+    );
+  }
+
+  /// Share devices to a user by homeId + account (append to existing shares).
+  @override
+  Future<Map<String, dynamic>> addShareWithHomeId({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'addShareWithHomeId',
+      <String, dynamic>{
+        'homeId': homeId,
+        'countryCode': countryCode,
+        'userAccount': userAccount,
+        'devIds': devIds,
+      },
+    );
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Query the users to whom current user has shared devices under homeId.
+  @override
+  Future<List<Map<String, dynamic>>> queryUserShareList({
+    required int homeId,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'queryUserShareList',
+      <String, dynamic>{'homeId': homeId},
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  /// Query all users from whom current user has received shared devices.
+  @override
+  Future<List<Map<String, dynamic>>> queryShareReceivedUserList() async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'queryShareReceivedUserList',
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  /// Query share details sent by current user to member [memberId].
+  @override
+  Future<Map<String, dynamic>> getUserShareInfo({required int memberId}) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'getUserShareInfo',
+      <String, dynamic>{'memberId': memberId},
+    );
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Query share details received from member [memberId].
+  @override
+  Future<Map<String, dynamic>> getReceivedShareInfo({
+    required int memberId,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'getReceivedShareInfo',
+      <String, dynamic>{'memberId': memberId},
+    );
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Query the list of users who have been shared device [devId].
+  @override
+  Future<List<Map<String, dynamic>>> queryDevShareUserList({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'queryDevShareUserList',
+      <String, dynamic>{'devId': devId},
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>> queryShareDevFromInfo({
+    required String devId,
+  }) async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'queryShareDevFromInfo',
+      <String, dynamic>{'devId': devId},
+    );
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Remove all share relationships with user [memberId] (as the initiator).
+  @override
+  Future<void> removeUserShare({required int memberId}) async {
+    await methodChannel.invokeMethod<void>('removeUserShare', <String, dynamic>{
+      'memberId': memberId,
+    });
+  }
+
+  @override
+  Future<void> removeReceivedUserShare({required int memberId}) async {
+    await methodChannel.invokeMethod<void>(
+      'removeReceivedUserShare',
+      <String, dynamic>{'memberId': memberId},
+    );
+  }
+
+  /// Remove device [devId] from the active share with user [memberId].
+  @override
+  Future<void> disableDevShare({
+    required String devId,
+    required int memberId,
+  }) async {
+    await methodChannel.invokeMethod<void>('disableDevShare', <String, dynamic>{
+      'devId': devId,
+      'memberId': memberId,
+    });
+  }
+
+  @override
+  Future<void> removeReceivedDevShare({required String devId}) async {
+    await methodChannel.invokeMethod<void>(
+      'removeReceivedDevShare',
+      <String, dynamic>{'devId': devId},
+    );
+  }
+
+  /// Rename the nickname/note for a user you have shared devices with.
+  @override
+  Future<void> renameShareNickname({
+    required int memberId,
+    required String name,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'renameShareNickname',
+      <String, dynamic>{'memberId': memberId, 'name': name},
+    );
+  }
+
+  /// Rename the nickname/note for a user who shared devices with you.
+  @override
+  Future<void> renameReceivedShareNickname({
+    required int memberId,
+    required String name,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'renameReceivedShareNickname',
+      <String, dynamic>{'memberId': memberId, 'name': name},
+    );
+  }
+
+  /// Send a device share invitation to [userAccount] (returns share ID).
+  @override
+  Future<int> inviteShare({
+    required String devId,
+    required String userAccount,
+    required String countryCode,
+  }) async {
+    final result = await methodChannel.invokeMethod<int>(
+      'inviteShare',
+      <String, dynamic>{
+        'devId': devId,
+        'userAccount': userAccount,
+        'countryCode': countryCode,
+      },
+    );
+    return result ?? 0;
+  }
+
+  /// Confirm a share invitation by [shareId].
+  @override
+  Future<void> confirmShareInvite({required int shareId}) async {
+    await methodChannel.invokeMethod<void>(
+      'confirmShareInvite',
+      <String, dynamic>{'shareId': shareId},
+    );
+  }
+
+  /// Query the list of users who are sharing group [groupId].
+  @override
+  Future<List<Map<String, dynamic>>> queryGroupSharedUserList({
+    required int groupId,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'queryGroupSharedUserList',
+      <String, dynamic>{'groupId': groupId},
+    );
+    return (result ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  @override
+  Future<void> addShareUserForGroup({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required int groupId,
+  }) async {
+    await methodChannel
+        .invokeMethod<void>('addShareUserForGroup', <String, dynamic>{
+          'homeId': homeId,
+          'countryCode': countryCode,
+          'userAccount': userAccount,
+          'groupId': groupId,
+        });
+  }
+
+  @override
+  Future<void> removeGroupShare({
+    required int groupId,
+    required int memberId,
+  }) async {
+    await methodChannel.invokeMethod<void>(
+      'removeGroupShare',
+      <String, dynamic>{'groupId': groupId, 'memberId': memberId},
+    );
+  }
 }

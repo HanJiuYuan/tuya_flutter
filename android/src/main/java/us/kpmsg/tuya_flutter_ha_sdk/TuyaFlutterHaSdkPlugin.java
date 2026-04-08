@@ -41,6 +41,10 @@ import com.thingclips.smart.sdk.api.IThingOptimizedActivator;
 import com.thingclips.smart.sdk.bean.ApQueryBuilder;
 import com.thingclips.smart.home.sdk.callback.IThingResultCallback;
 import com.thingclips.smart.home.sdk.bean.WiFiInfoBean;
+import com.thingclips.smart.home.sdk.api.IThingHomeDeviceShare;
+import com.thingclips.smart.home.sdk.bean.SharedUserInfoBean;
+import com.thingclips.smart.home.sdk.bean.ShareSentUserDetailBean;
+import com.thingclips.smart.home.sdk.bean.ShareReceivedUserDetailBean;
 import com.thingclips.smart.android.ble.api.LeScanSetting;
 import com.thingclips.smart.android.ble.api.ScanType;
 import com.thingclips.smart.android.ble.api.BleScanResponse;
@@ -2368,10 +2372,503 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     }
                 });
                 break;
+
+           
+            // Share one or more devices to a user and overwrite previous shares
+            case "addShare": {
+                Number shareHomeId = call.argument("homeId");
+                String shareCountryCode = call.argument("countryCode");
+                String shareUserAccount = call.argument("userAccount");
+                List<String> shareDevIds = call.argument("devIds");
+                List<String> shareMeshIds = call.argument("meshIds");
+                Boolean shareAutoSharing = call.argument("autoSharing");
+                if (shareHomeId == null || shareCountryCode == null || shareUserAccount == null || shareDevIds == null) {
+                    result.error("MISSING_ARGS", "homeId, countryCode, userAccount, devIds required", null);
+                    break;
+                }
+                // ShareIdBean path differs across SDK versions — build via reflection
+                Object shareIdBean;
+                try {
+                    Class<?> beanClazz = null;
+                    for (String pkg : new String[]{
+                            "com.thingclips.smart.home.sdk.bean.ShareIdBean",
+                            "com.thingclips.smart.homesdk.bean.ShareIdBean",
+                            "com.tuya.smart.home.sdk.bean.ShareIdBean"}) {
+                        try { beanClazz = Class.forName(pkg); break; } catch (ClassNotFoundException ignore) {}
+                    }
+                    if (beanClazz == null) {
+                        result.error("SDK_ERROR", "ShareIdBean class not found in SDK", null);
+                        break;
+                    }
+                    shareIdBean = beanClazz.getDeclaredConstructor().newInstance();
+                    try { beanClazz.getMethod("setDevIds", List.class).invoke(shareIdBean, shareDevIds); } catch (Throwable ignore) {}
+                    try { beanClazz.getMethod("setMeshIds", List.class).invoke(shareIdBean, shareMeshIds != null ? shareMeshIds : new ArrayList<>()); } catch (Throwable ignore) {}
+                } catch (Throwable e) {
+                    result.error("SDK_ERROR", "ShareIdBean init failed: " + e.getMessage(), null);
+                    break;
+                }
+                Object shareInstance = ThingHomeSdk.getDeviceShareInstance();
+                Method addShareMethod = findMethodByNameAndArgCount(shareInstance, "addShare", 6);
+                if (addShareMethod == null) {
+                    result.error("NOT_SUPPORTED", "addShare method not found", null);
+                    break;
+                }
+                try {
+                    final Boolean finalAutoSharing = shareAutoSharing;
+                    final Object finalShareIdBean = shareIdBean;
+                    Object cb = createCallbackProxy(addShareMethod.getParameterTypes()[5], new OtaCallbackHandler() {
+                        @Override public void onSuccess(Object data) { result.success(toJsonObject(data)); }
+                        @Override public void onFailure(String code, String msg) { result.error(code, msg, null); }
+                    });
+                    addShareMethod.invoke(shareInstance,
+                        shareHomeId.longValue(), shareCountryCode, shareUserAccount,
+                        finalShareIdBean, finalAutoSharing != null && finalAutoSharing, cb);
+                } catch (Throwable t) {
+                    result.error("CALL_FAILED", t.getMessage(), null);
+                }
+                break;
+            }
+
+            // Share devices to a user by member ID (append)
+            case "addShareWithMemberId": {
+                Number shareMemberId = call.argument("memberId");
+                List<String> memberDevIds = call.argument("devIds");
+                if (shareMemberId == null || memberDevIds == null) {
+                    result.error("MISSING_ARGS", "memberId, devIds required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().addShareWithMemberId(
+                    shareMemberId.longValue(), memberDevIds,
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Share devices to a user by homeId + account (append)
+            case "addShareWithHomeId": {
+                Number withHomeId = call.argument("homeId");
+                String withCountryCode = call.argument("countryCode");
+                String withUserAccount = call.argument("userAccount");
+                List<String> withDevIds = call.argument("devIds");
+                if (withHomeId == null || withCountryCode == null || withUserAccount == null || withDevIds == null) {
+                    result.error("MISSING_ARGS", "homeId, countryCode, userAccount, devIds required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().addShareWithHomeId(
+                    withHomeId.longValue(), withCountryCode, withUserAccount, withDevIds,
+                    new IThingResultCallback<SharedUserInfoBean>() {
+                        @Override
+                        public void onSuccess(SharedUserInfoBean bean) {
+                            result.success(sharedUserInfoBeanToMap(bean));
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query the list of users to whom current user has shared devices
+            case "queryUserShareList": {
+                Number qHomeId = call.argument("homeId");
+                if (qHomeId == null) {
+                    result.error("MISSING_ARGS", "homeId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().queryUserShareList(
+                    qHomeId.longValue(),
+                    new IThingResultCallback<List<SharedUserInfoBean>>() {
+                        @Override
+                        public void onSuccess(List<SharedUserInfoBean> list) {
+                            List<Map<String, Object>> mapped = new ArrayList<>();
+                            if (list != null) for (SharedUserInfoBean b : list) mapped.add(sharedUserInfoBeanToMap(b));
+                            result.success(mapped);
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query all users from whom current user has received shared devices
+            case "queryShareReceivedUserList": {
+                ThingHomeSdk.getDeviceShareInstance().queryShareReceivedUserList(
+                    new IThingResultCallback<List<SharedUserInfoBean>>() {
+                        @Override
+                        public void onSuccess(List<SharedUserInfoBean> list) {
+                            List<Map<String, Object>> mapped = new ArrayList<>();
+                            if (list != null) for (SharedUserInfoBean b : list) mapped.add(sharedUserInfoBeanToMap(b));
+                            result.success(mapped);
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query share details sent by current user to member
+            case "getUserShareInfo": {
+                Number gusMemberId = call.argument("memberId");
+                if (gusMemberId == null) {
+                    result.error("MISSING_ARGS", "memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().getUserShareInfo(
+                    gusMemberId.longValue(),
+                    new IThingResultCallback<ShareSentUserDetailBean>() {
+                        @Override
+                        public void onSuccess(ShareSentUserDetailBean bean) {
+                            result.success(shareSentUserDetailBeanToMap(bean));
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query share details received from a specific member
+            case "getReceivedShareInfo": {
+                Number griMemberId = call.argument("memberId");
+                if (griMemberId == null) {
+                    result.error("MISSING_ARGS", "memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().getReceivedShareInfo(
+                    griMemberId.longValue(),
+                    new IThingResultCallback<ShareReceivedUserDetailBean>() {
+                        @Override
+                        public void onSuccess(ShareReceivedUserDetailBean bean) {
+                            result.success(shareReceivedUserDetailBeanToMap(bean));
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query the list of users who have been shared a specific device
+            case "queryDevShareUserList": {
+                String qdsDevId = call.argument("devId");
+                if (qdsDevId == null || qdsDevId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().queryDevShareUserList(
+                    qdsDevId,
+                    new IThingResultCallback<List<SharedUserInfoBean>>() {
+                        @Override
+                        public void onSuccess(List<SharedUserInfoBean> list) {
+                            List<Map<String, Object>> mapped = new ArrayList<>();
+                            if (list != null) for (SharedUserInfoBean b : list) mapped.add(sharedUserInfoBeanToMap(b));
+                            result.success(mapped);
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query the source of a shared device (who shared it to current user)
+            case "queryShareDevFromInfo": {
+                String qsdfDevId = call.argument("devId");
+                if (qsdfDevId == null || qsdfDevId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().queryShareDevFromInfo(
+                    qsdfDevId,
+                    new IThingResultCallback<SharedUserInfoBean>() {
+                        @Override
+                        public void onSuccess(SharedUserInfoBean bean) {
+                            result.success(sharedUserInfoBeanToMap(bean));
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Remove all share relationships with a user (as initiator)
+            case "removeUserShare": {
+                Number rusMemberId = call.argument("memberId");
+                if (rusMemberId == null) {
+                    result.error("MISSING_ARGS", "memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().removeUserShare(
+                    rusMemberId.longValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Remove all received share relationships with a user (as receiver)
+            case "removeReceivedUserShare": {
+                Number rrusMemberId = call.argument("memberId");
+                if (rrusMemberId == null) {
+                    result.error("MISSING_ARGS", "memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().removeReceivedUserShare(
+                    rrusMemberId.longValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Remove a specific device from active share with a user
+            case "disableDevShare": {
+                String ddsDevId = call.argument("devId");
+                Number ddsMemberId = call.argument("memberId");
+                if (ddsDevId == null || ddsDevId.isEmpty() || ddsMemberId == null) {
+                    result.error("MISSING_ARGS", "devId, memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().disableDevShare(
+                    ddsDevId, ddsMemberId.longValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Remove a received shared device
+            case "removeReceivedDevShare": {
+                String rrdsDevId = call.argument("devId");
+                if (rrdsDevId == null || rrdsDevId.isEmpty()) {
+                    result.error("MISSING_ARGS", "devId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().removeReceivedDevShare(
+                    rrdsDevId,
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Rename the nickname/note for a user you have shared devices with
+            case "renameShareNickname": {
+                Number rsnMemberId = call.argument("memberId");
+                String rsnName = call.argument("name");
+                if (rsnMemberId == null || rsnName == null) {
+                    result.error("MISSING_ARGS", "memberId, name required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().renameShareNickname(
+                    rsnMemberId.longValue(), rsnName,
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Rename the nickname/note for a user who shared devices with you
+            case "renameReceivedShareNickname": {
+                Number rrsnMemberId = call.argument("memberId");
+                String rrsnName = call.argument("name");
+                if (rrsnMemberId == null || rrsnName == null) {
+                    result.error("MISSING_ARGS", "memberId, name required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().renameReceivedShareNickname(
+                    rrsnMemberId.longValue(), rrsnName,
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Send a device share invitation (returns share ID)
+            case "inviteShare": {
+                String invDevId = call.argument("devId");
+                String invUserAccount = call.argument("userAccount");
+                String invCountryCode = call.argument("countryCode");
+                if (invDevId == null || invDevId.isEmpty() || invUserAccount == null || invCountryCode == null) {
+                    result.error("MISSING_ARGS", "devId, userAccount, countryCode required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().inviteShare(
+                    invDevId, invUserAccount, invCountryCode,
+                    new IThingResultCallback<Integer>() {
+                        @Override
+                        public void onSuccess(Integer shareId) {
+                            result.success(shareId);
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Confirm a share invitation by share ID
+            case "confirmShareInvite": {
+                Number csShareId = call.argument("shareId");
+                if (csShareId == null) {
+                    result.error("MISSING_ARGS", "shareId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().confirmShareInviteShare(
+                    csShareId.intValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Query the list of users who are sharing a specific group
+            case "queryGroupSharedUserList": {
+                Number qgsGroupId = call.argument("groupId");
+                if (qgsGroupId == null) {
+                    result.error("MISSING_ARGS", "groupId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().queryGroupSharedUserList(
+                    qgsGroupId.longValue(),
+                    new IThingResultCallback<List<SharedUserInfoBean>>() {
+                        @Override
+                        public void onSuccess(List<SharedUserInfoBean> list) {
+                            List<Map<String, Object>> mapped = new ArrayList<>();
+                            if (list != null) for (SharedUserInfoBean b : list) mapped.add(sharedUserInfoBeanToMap(b));
+                            result.success(mapped);
+                        }
+                        @Override
+                        public void onError(String errorCode, String errorMsg) {
+                            result.error(errorCode, errorMsg, null);
+                        }
+                    });
+                break;
+            }
+
+            // Share a group with a user
+            case "addShareUserForGroup": {
+                Number asugHomeId = call.argument("homeId");
+                String asugCountryCode = call.argument("countryCode");
+                String asugUserAccount = call.argument("userAccount");
+                Number asugGroupId = call.argument("groupId");
+                if (asugHomeId == null || asugCountryCode == null || asugUserAccount == null || asugGroupId == null) {
+                    result.error("MISSING_ARGS", "homeId, countryCode, userAccount, groupId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().addShareUserForGroup(
+                    asugHomeId.longValue(), asugCountryCode, asugUserAccount,
+                    asugGroupId.longValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
+            // Remove a member from a group share
+            case "removeGroupShare": {
+                Number rgsGroupId = call.argument("groupId");
+                Number rgsMemberId = call.argument("memberId");
+                if (rgsGroupId == null || rgsMemberId == null) {
+                    result.error("MISSING_ARGS", "groupId, memberId required", null);
+                    break;
+                }
+                ThingHomeSdk.getDeviceShareInstance().removeGroupShare(
+                    rgsGroupId.longValue(), rgsMemberId.longValue(),
+                    new IResultCallback() {
+                        @Override
+                        public void onSuccess() { result.success(null); }
+                        @Override
+                        public void onError(String code, String error) {
+                            result.error(code, error, null);
+                        }
+                    });
+                break;
+            }
+
             default:
                 result.notImplemented();
                 break;
         }
+    }
+
+    // ── Share Helper Methods ──────────────────────────────────────────────────────
+    // Use FastJSON serialization — avoids hard-coding getter names that may differ
+    // across SDK versions (e.g. getMemberId() vs memberId public field, etc.)
+
+    private Map<String, Object> sharedUserInfoBeanToMap(SharedUserInfoBean bean) {
+        if (bean == null) return new HashMap<>();
+        Map<String, Object> m = toMap(bean);
+        return m != null ? m : new HashMap<>();
+    }
+
+    private Map<String, Object> shareSentUserDetailBeanToMap(ShareSentUserDetailBean bean) {
+        if (bean == null) return new HashMap<>();
+        Map<String, Object> m = toMap(bean);
+        return m != null ? m : new HashMap<>();
+    }
+
+    private Map<String, Object> shareReceivedUserDetailBeanToMap(ShareReceivedUserDetailBean bean) {
+        if (bean == null) return new HashMap<>();
+        Map<String, Object> m = toMap(bean);
+        return m != null ? m : new HashMap<>();
     }
 
     private void checkPermission() {

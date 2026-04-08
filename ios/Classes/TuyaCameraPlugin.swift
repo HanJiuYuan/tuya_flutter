@@ -171,7 +171,7 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
             }
             
             result(nil)
-            self.tuyaCameraViewFactory!.startCamera()
+            self.tuyaCameraViewFactory?.startCamera(devId: deviceId)
             
             
         case "stopLiveStream":
@@ -199,7 +199,7 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
                 return result(FlutterError(code:"DEVICE_ERROR",
                                            message:"Decice not online", details:nil))
             }
-            self.tuyaCameraViewFactory!.stopCamera()
+            self.tuyaCameraViewFactory?.stopCamera(devId: deviceId)
             result(nil)
             
             // ────────────── single-way talk & mute
@@ -706,15 +706,11 @@ class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
         }
         return tuyaCameraPlatformView
     }
-    func startCamera(){
-        if(tuyaCameraPlatformView != nil){
-            tuyaCameraPlatformView!.startCamera()
-        }
+    func startCamera(devId: String = ""){
+        targetView(devId: devId)?.startCamera()
     }
-    func stopCamera(){
-        if(tuyaCameraPlatformView != nil){
-            tuyaCameraPlatformView!.stopCamera()
-        }
+    func stopCamera(devId: String = ""){
+        targetView(devId: devId)?.stopCamera()
     }
     func startLocalRecording(filePath: String){
         if(tuyaCameraPlatformView != nil){
@@ -879,7 +875,9 @@ class TuyaCameraPlatformView:
     }
     
     func view() -> UIView { container }
-    deinit { camera.stopPreview(); camera.disConnect() }
+    deinit {
+        camera?.stopPreview()
+    }
     
     func cameraDidConnected(_ camera: ThingSmartCameraType!) {
         print("cameraDidConnected")

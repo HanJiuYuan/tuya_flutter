@@ -1359,8 +1359,8 @@ class TuyaFlutterHaSdk {
   /// ```
   ///
   /// Throws [PlatformException] on failure.
-  static Future<void> disconnectP2P() {
-    return TuyaCameraMethods.disconnectP2P();
+  static Future<void> disconnectP2P({String? devId}) {
+    return TuyaCameraMethods.disconnectP2P(devId: devId);
   }
 
   /// 开始预览
@@ -1374,8 +1374,8 @@ class TuyaFlutterHaSdk {
   /// - 'clarity': 清晰度，2=标清，4=高清
   ///
   /// Throws [PlatformException] on failure.
-  static Future<void> startPreview({required int clarity}) {
-    return TuyaCameraMethods.startPreview(clarity: clarity);
+  static Future<void> startPreview({required int clarity, String? devId}) {
+    return TuyaCameraMethods.startPreview(clarity: clarity, devId: devId);
   }
 
   /// 停止预览
@@ -1386,8 +1386,8 @@ class TuyaFlutterHaSdk {
   /// ```
   ///
   /// Throws [PlatformException] on failure.
-  static Future<void> stopPreview() {
-    return TuyaCameraMethods.stopPreview();
+  static Future<void> stopPreview({String? devId}) {
+    return TuyaCameraMethods.stopPreview(devId: devId);
   }
 
   /// 设置实时预览清晰度
@@ -2305,5 +2305,265 @@ class TuyaFlutterHaSdk {
     return splitIndexes
         .map((i) => <String, int>{'viewIndex': i, 'cameraIndex': i})
         .toList();
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Device Share
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  /// Share one or more devices to a user and **overwrite** any previous shares
+  /// the current user had with that target account.
+  ///
+  /// - [homeId] The home the devices belong to.
+  /// - [countryCode] Country/region code of the target account (e.g. "86").
+  /// - [userAccount] Account (phone / email) of the target user.
+  /// - [devIds] List of device IDs to share.
+  /// - [meshIds] Optional list of BLE-Mesh device IDs to share.
+  /// - [autoSharing] Whether to automatically share future devices.
+  ///
+  /// Returns a map representing `SharedUserInfoBean` on success.
+  /// Throws [PlatformException] on failure.
+  static Future<Map<String, dynamic>> addShare({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+    List<String>? meshIds,
+    bool autoSharing = false,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.addShare(
+      homeId: homeId,
+      countryCode: countryCode,
+      userAccount: userAccount,
+      devIds: devIds,
+      meshIds: meshIds,
+      autoSharing: autoSharing,
+    );
+  }
+
+  /// Share devices to a user by [memberId] (append to existing shares).
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> addShareWithMemberId({
+    required int memberId,
+    required List<String> devIds,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.addShareWithMemberId(
+      memberId: memberId,
+      devIds: devIds,
+    );
+  }
+
+  /// Share devices to a user by [homeId] + account (append to existing shares).
+  ///
+  /// Returns a map representing `SharedUserInfoBean` on success.
+  /// Throws [PlatformException] on failure.
+  static Future<Map<String, dynamic>> addShareWithHomeId({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required List<String> devIds,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.addShareWithHomeId(
+      homeId: homeId,
+      countryCode: countryCode,
+      userAccount: userAccount,
+      devIds: devIds,
+    );
+  }
+
+  /// Query the users to whom the current user has actively shared devices
+  /// under [homeId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<Map<String, dynamic>>> queryUserShareList({
+    required int homeId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.queryUserShareList(homeId: homeId);
+  }
+
+  /// Query all users whose devices have been shared to the current user.
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<Map<String, dynamic>>> queryShareReceivedUserList() {
+    return TuyaFlutterHaSdkPlatform.instance.queryShareReceivedUserList();
+  }
+
+  /// Query the share details sent by the current user to member [memberId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<Map<String, dynamic>> getUserShareInfo({
+    required int memberId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.getUserShareInfo(
+      memberId: memberId,
+    );
+  }
+
+  /// Query the share details received from member [memberId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<Map<String, dynamic>> getReceivedShareInfo({
+    required int memberId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.getReceivedShareInfo(
+      memberId: memberId,
+    );
+  }
+
+  /// Query the list of users who have been shared device [devId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<Map<String, dynamic>>> queryDevShareUserList({
+    required String devId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.queryDevShareUserList(
+      devId: devId,
+    );
+  }
+
+  /// Query who shared device [devId] to the current user.
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<Map<String, dynamic>> queryShareDevFromInfo({
+    required String devId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.queryShareDevFromInfo(
+      devId: devId,
+    );
+  }
+
+  /// Remove all active share relationships with user [memberId]
+  /// (as the share initiator).
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> removeUserShare({required int memberId}) {
+    return TuyaFlutterHaSdkPlatform.instance.removeUserShare(
+      memberId: memberId,
+    );
+  }
+
+  /// Remove all received share relationships with user [memberId]
+  /// (as the share receiver).
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> removeReceivedUserShare({required int memberId}) {
+    return TuyaFlutterHaSdkPlatform.instance.removeReceivedUserShare(
+      memberId: memberId,
+    );
+  }
+
+  /// Remove device [devId] from the active share with user [memberId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> disableDevShare({
+    required String devId,
+    required int memberId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.disableDevShare(
+      devId: devId,
+      memberId: memberId,
+    );
+  }
+
+  /// Remove a received shared device [devId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> removeReceivedDevShare({required String devId}) {
+    return TuyaFlutterHaSdkPlatform.instance.removeReceivedDevShare(
+      devId: devId,
+    );
+  }
+
+  /// Rename the nickname/note for a user you have shared devices with.
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> renameShareNickname({
+    required int memberId,
+    required String name,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.renameShareNickname(
+      memberId: memberId,
+      name: name,
+    );
+  }
+
+  /// Rename the nickname/note for a user who shared devices with you.
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> renameReceivedShareNickname({
+    required int memberId,
+    required String name,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.renameReceivedShareNickname(
+      memberId: memberId,
+      name: name,
+    );
+  }
+
+  /// Send a device share invitation to [userAccount].
+  ///
+  /// Returns the share ID (integer) which is needed to confirm the invitation.
+  /// Throws [PlatformException] on failure.
+  static Future<int> inviteShare({
+    required String devId,
+    required String userAccount,
+    required String countryCode,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.inviteShare(
+      devId: devId,
+      userAccount: userAccount,
+      countryCode: countryCode,
+    );
+  }
+
+  /// Confirm a share invitation identified by [shareId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> confirmShareInvite({required int shareId}) {
+    return TuyaFlutterHaSdkPlatform.instance.confirmShareInvite(
+      shareId: shareId,
+    );
+  }
+
+  /// Query the list of users who are sharing group [groupId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<List<Map<String, dynamic>>> queryGroupSharedUserList({
+    required int groupId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.queryGroupSharedUserList(
+      groupId: groupId,
+    );
+  }
+
+  /// Share group [groupId] with [userAccount].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> addShareUserForGroup({
+    required int homeId,
+    required String countryCode,
+    required String userAccount,
+    required int groupId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.addShareUserForGroup(
+      homeId: homeId,
+      countryCode: countryCode,
+      userAccount: userAccount,
+      groupId: groupId,
+    );
+  }
+
+  /// Remove member [memberId] from group share [groupId].
+  ///
+  /// Throws [PlatformException] on failure.
+  static Future<void> removeGroupShare({
+    required int groupId,
+    required int memberId,
+  }) {
+    return TuyaFlutterHaSdkPlatform.instance.removeGroupShare(
+      groupId: groupId,
+      memberId: memberId,
+    );
   }
 }

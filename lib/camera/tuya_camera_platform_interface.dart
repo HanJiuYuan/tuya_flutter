@@ -63,13 +63,13 @@ abstract class TuyaCameraPlatform extends PlatformInterface {
   Future<void> connectP2P({required String devId});
 
   /// 断开 P2P 连接
-  Future<void> disconnectP2P();
+  Future<void> disconnectP2P({String? devId});
 
   /// 开始预览（清晰度：2=标清，4=高清）
-  Future<void> startPreview({required int clarity});
+  Future<void> startPreview({required int clarity, String? devId});
 
   /// 停止预览
-  Future<void> stopPreview();
+  Future<void> stopPreview({String? devId});
 
   /// 设置实时预览清晰度（2=标清，4=高清）
   Future<void> setDefinition({required int definition});
