@@ -32,7 +32,10 @@
   - [6.7 门锁 / Matter](#67-门锁--matter)
   - [6.8 摄像头（IPC）](#68-摄像头ipc)
 - [7. 常见问题（FAQ）](#7-常见问题faq)
-- [8. 联系方式](#8-联系方式)
+- [8. 解决方案](#8-解决方案)
+  - [8.1 视频无法正常播放](#81-视频无法正常播放)
+- [9. 联系方式](#9-联系方式)
+ 
 
 ---
 
@@ -46,7 +49,7 @@
 
 ## 2. 安装（Flutter）
 
-在你的 App 项目 `pubspec.yaml` 中添加依赖（按你的发布方式选择其一）：
+在你的 App 项目 `pubspec.yaml` 中添加依赖：
 
 ```yaml
 dependencies:
@@ -55,18 +58,41 @@ dependencies:
 
 然后执行：
 
-```bash
+## 8. 解决方案
 flutter pub get
-```
+### 8.1 视频无法正常播放
 
----
+Android 12 及以上系统对前台状态、P2P 建链时机和平台视图渲染上下文更加敏感。某些机型上，Flutter 页面直接发起摄像头直播时，涂鸦原生 SDK 可能无法在合适的前台上下文里完成 P2P 通道建立，最终表现为预览失败、黑屏、连接超时，或出现错误码 `-3`。
 
-## 3. 平台侧接入
+插件内置了一套“原生预热（Prewarm）”方案，用来缓解这类问题。核心思路是在 Flutter 真正开始渲染视频前，先短暂拉起一个透明的原生 Activity，让原生侧优先完成前台切换和部分初始化动作，待通道稳定后再回到 Flutter 页面继续播放。这个过程对用户几乎无感，但能明显提高 Android 12 及以上设备上的直播成功率。
 
-该插件是对 Tuya/ThingClips 原生 SDK 的封装，**iOS 需要放置 Tuya iOS SDK 文件，Android 需要配置对应依赖与初始化**。
+实现思路如下：
 
-### 3.1 iOS
+1. Android 侧准备透明预热 Activity。
+  在 `AndroidManifest.xml` 中注册一个透明 Activity，例如 `PrewarmCameraActivity`，确保它不会打断当前页面视觉流程，只承担前台预热和上下文切换职责。
 
+2. Flutter 首次播放前主动触发预热。
+  在第一次调用 `startLiveStream` 之前，通过 `MethodChannel` 通知 Android 原生侧先执行预热逻辑，而不是立即进入正式播放。
+
+3. 监听应用生命周期并恢复播放。
+  Flutter 页面建议实现 `WidgetsBindingObserver`，监听应用从 `paused` 回到 `resumed` 的时机。当预热 Activity 结束并返回 Flutter 页面后，可以在合适时机自动恢复视频流或重新执行必要的预览初始化。
+
+4. 将预热与首次播放绑定，而不是每次都执行。
+  一般建议仅在首次进入摄像头页面、首次建立 P2P 连接，或检测到连接异常重试时启用预热，避免每次播放都触发一次原生跳转，影响体验。
+
+适用场景：
+
+- Android 12 及以上设备上直播经常黑屏。
+- P2P 连接偶发超时，尤其是首次进入摄像头页面时。
+- 同一设备在原生 Demo 中可正常播放，但在 Flutter PlatformView 场景下成功率偏低。
+
+注意事项：
+
+- 透明 Activity 只用于辅助建立稳定的原生上下文，不应承载业务 UI。
+- 如果页面实现了自动恢复播放，需要避免重复调用 `startLiveStream`，防止重复建链。
+- 若项目中已经有前后台切换监听或播放器状态机，建议把预热后的恢复逻辑统一收口到同一套播放控制流程里。
+
+该方案的本质不是替代 SDK 的正常播放流程，而是在特定 Android 版本和设备环境下，为 P2P 建链提供更稳定的前台执行条件。对于 Android 12 上连接不稳定、首帧失败或偶发黑屏的问题，这通常是一个有效且成本较低的工程化补救方案。
 1. 从 Tuya IoT 平台下载 iOS SDK 包并解压，你会得到：
 
 - `Podfile`
@@ -669,9 +695,10 @@ AndroidView(
 
 - 确保 `AndroidManifest.xml` 中已添加 `BLUETOOTH_SCAN` 和 `BLUETOOTH_CONNECT` 权限。
 
-### 7.5 Android 12+ 摄像头预览失败
+### 7.5 Android 摄像头预览/连接失败（P2P 超时）
+- 问题原因：
+- Android 12 及以上系统对设备连接（P2P 建立）和前台状态有更严格的限制。由于 Flutter 的 PlatformView 渲染机制，涂鸦 SDK 在某些情况下无法正确获得前台上下文，导致 P2P 通道建立超时（错误码 -3）或无法启动预览。
 
-- 由于涂鸦并未添加前台权限，导致 Android 摄像头预览失败。
 
 ### 7.6 设备共享失败或无法查询
 
@@ -692,7 +719,23 @@ AndroidView(
 
 ---
 
-## 8. 联系方式
+## 8. 解决方案：
+
+### 8.1 视频无法正常浏览
+
+- 插件内置了“原生预热（Prewarm）”机制。通过在 Flutter 启动直播前，先唤起一个透明的原生 Activity 来强制提升 App 的前台优先级，待通道建立后再返回 Flutter 页面渲染。
+- 实现步骤：
+- Android 侧配置： 确保在 `AndroidManifest.xml` 中注册了透明预热` Activity（如 PrewarmCameraActivity）。`
+- Flutter 层逻辑：
+- 在首次调用 `startLiveStream` 前，通过 `MethodChannel` 触发原生预热。
+- 使用 `WidgetsBindingObserver` 监听 App 生命周期。
+- 当生命周期从 `paused` 回到 `resumed` 时，自动恢复视频流播放。
+- 该方案能有效解决 Android 12 上 P2P 连接不稳定的问题，且通过透明 `Activity` 实现，对用户视觉影响极小。
+
+---
+
+
+## 9. 联系方式
 
 - Email: 656213779@qq.com
 
