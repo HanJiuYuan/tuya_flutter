@@ -15,6 +15,10 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
     private var pairingEventSink: FlutterEventSink?
     private var discoveryCallback: FlutterResult?
     private var device: ThingSmartDevice?
+    private var otaPollingTimer: Timer?
+    private var otaPollingDevice: ThingSmartDevice?
+    private var otaPollingTypes: Set<Int> = []
+    private var otaPollingActive = false
 
     private var wifiNetworkManager: ThingDeviceNetworkManager?
     private var wifiNetworkDevId: String?
@@ -63,7 +67,7 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
         "controlType": model.controlType,
         "waitingDesc": model.waitingDesc ?? "",
         "upgradingDesc": model.upgradingDesc ?? "",
-        "canUpgrade": model.canUpgrade,
+        "canUpgrade": model.canUpgrade ?? NSNull(),
         "remind": model.remind ?? "",
         "upgradeMode": model.upgradeMode.rawValue
     ]
@@ -407,27 +411,33 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
                 return
             }
+            self.device = device
+            self.device?.delegate = self
             device.checkFirmwareUpgrade({ firmwares in
+                let targets = requestFirmwares.compactMap { item -> String? in
+                    guard let type = item["type"] else { return nil }
+                    let mode = item["upgradeMode"] ?? 0
+                    return "\(type)-\(mode)"
+                }
                 let candidates: [ThingSmartFirmwareUpgradeModel]
-                if requestFirmwares.isEmpty {
+                if targets.isEmpty {
                     candidates = firmwares.filter { $0.upgradeStatus.rawValue == 1 }
                 } else {
-                    let targets = requestFirmwares.compactMap { item -> String? in
-                        guard let type = item["type"] else { return nil }
-                        let mode = item["upgradeMode"] ?? 0
-                        return "\(type)-\(mode)"
-                    }
                     candidates = firmwares.filter { model in
-                        targets.contains("\(model.type)-\(model.upgradeMode.rawValue)")
+                        targets.contains("\(model.type)-\(model.upgradeMode.rawValue)") && model.upgradeStatus.rawValue == 1
                     }
                 }
                 if candidates.isEmpty {
                     result(FlutterError(code: "NO_UPGRADABLE_FIRMWARE", message: "No firmware can be upgraded", details: nil))
                     return
                 }
-                self.device = device
-                self.device?.delegate = self
+                if let blocked = candidates.first(where: { ($0.canUpgrade?.intValue ?? 1) == 0 }) {
+                    result(FlutterError(code: "UPGRADE_PRECONDITION_FAILED", message: blocked.remind ?? "Upgrade precondition not met", details: nil))
+                    return
+                }
                 device.startFirmwareUpgrade(candidates)
+                let upgradeTypes = candidates.map { $0.type }
+                self.startOTAProgressMonitor(device: device, types: upgradeTypes)
                 result(["started": true, "count": candidates.count])
             }, failure: { error in
                 let nsError = error as NSError?
@@ -464,6 +474,7 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device instance is nil", details: nil))
                 return
             }
+            stopOTAProgressMonitor()
             device.cancelFirmwareUpgrade({
                 result(nil)
             }, failure: { error in
@@ -695,6 +706,19 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 }
             )
             
+        case "getDeviceModel":
+            guard let args = call.arguments as? [String: Any],
+                  let devId = args["devId"] as? String,
+                  !devId.isEmpty else {
+                result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
+                return
+            }
+            if let device = ThingSmartDevice(deviceId: devId) {
+                result(self.deviceModelToMap(device.deviceModel))
+            } else {
+                result(FlutterError(code: "DEVICE_NOT_FOUND", message: "Device model not in cache", details: nil))
+            }
+
         case "getHomeDevices":
             guard let args = call.arguments as? [String: Any],
                   let homeId = args["homeId"] as? Int else {
@@ -1425,27 +1449,19 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     details: nil))
                 return
             }
-            let meshIds = args["meshIds"] as? [String] ?? []
-            let autoSharing = args["autoSharing"] as? Bool ?? false
-            let shareBean = ThingShareIdBean()
-            shareBean.devIds = devIds
-            shareBean.meshIds = meshIds
-            ThingHomeSdk.getDeviceShareInstance().addShare(
-                Int64(homeId),
-                countryCode: countryCode,
-                userAccount: userAccount,
-                bean: shareBean,
-                autoSharing: autoSharing,
-                success: { sharedUser in
-                    result(self.sharedUserInfoBeanToMap(sharedUser))
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            let requestModel = ThingSmartDeviceShareRequestModel()
+            requestModel.homeID = Int64(homeId)
+            requestModel.countryCode = countryCode
+            requestModel.userAccount = userAccount
+            requestModel.devIds = devIds
+            ThingSmartHomeDeviceShare().add(with: requestModel, success: { member in
+                result(self.shareMemberModelToMap(member))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Share devices to a user by member ID (append)
         case "addShareWithMemberId":
@@ -1459,19 +1475,16 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().addShare(
-                withMemberId: Int64(memberId),
-                devIds: devIds,
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().add(withMemberId: memberId, devIds: devIds, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
-        // Share devices to a user by homeId + account (append)
+        // Share devices to a user by homeId + account (deprecated, use addShare)
         case "addShareWithHomeId":
             guard
                 let args = call.arguments as? [String: Any],
@@ -1485,23 +1498,21 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().addShare(
-                withHomeId: Int64(homeId),
-                countryCode: countryCode,
-                userAccount: userAccount,
-                devIds: devIds,
-                success: { sharedUser in
-                    result(self.sharedUserInfoBeanToMap(sharedUser))
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            let requestModel = ThingSmartDeviceShareRequestModel()
+            requestModel.homeID = Int64(homeId)
+            requestModel.countryCode = countryCode
+            requestModel.userAccount = userAccount
+            requestModel.devIds = devIds
+            ThingSmartHomeDeviceShare().add(with: requestModel, success: { member in
+                result(self.shareMemberModelToMap(member))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
-        // Query the list of users to whom current user has shared devices
+        // Query the list of users to whom current user has shared devices under spaceId/homeId
         case "queryUserShareList":
             guard
                 let args = call.arguments as? [String: Any],
@@ -1510,34 +1521,27 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "homeId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().queryUserShareList(
-                Int64(homeId),
-                success: { list in
-                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
-                    result(mapped)
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getMemberList(withSpaceId: Int64(homeId), success: { list in
+                let mapped = (list ?? []).map { self.shareMemberModelToMap($0) }
+                result(mapped)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query all users from whom current user has received shared devices
         case "queryShareReceivedUserList":
-            ThingHomeSdk.getDeviceShareInstance().queryShareReceivedUserList(
-                success: { list in
-                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
-                    result(mapped)
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getReceiveMemberList(success: { list in
+                let mapped = (list ?? []).map { self.shareMemberModelToMap($0) }
+                result(mapped)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query share details sent by current user to member
         case "getUserShareInfo":
@@ -1548,18 +1552,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().getUserShareInfo(
-                Int64(memberId),
-                success: { detail in
-                    result(self.shareSentUserDetailBeanToMap(detail))
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getMemberDetail(withMemberId: memberId, success: { detail in
+                result(self.shareMemberDetailModelToMap(detail))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query share details received from a specific member
         case "getReceivedShareInfo":
@@ -1570,18 +1570,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().getReceivedShareInfo(
-                Int64(memberId),
-                success: { detail in
-                    result(self.shareReceivedUserDetailBeanToMap(detail))
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getReceiveMemberDetail(withMemberId: memberId, success: { detail in
+                result(self.shareReceiveMemberDetailModelToMap(detail))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query the list of users who have been shared a specific device
         case "queryDevShareUserList":
@@ -1592,19 +1588,15 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().queryDevShareUserList(
-                devId,
-                success: { list in
-                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
-                    result(mapped)
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getMemberList(withDevId: devId, success: { list in
+                let mapped = (list ?? []).map { self.shareMemberModelToMap($0) }
+                result(mapped)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query the source of a shared device (who shared it to current user)
         case "queryShareDevFromInfo":
@@ -1615,18 +1607,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().queryShareDevFromInfo(
-                devId,
-                success: { sharedUser in
-                    result(self.sharedUserInfoBeanToMap(sharedUser))
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getInfoWithDevId(devId, success: { model in
+                result(self.receivedShareUserModelToMap(model))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Remove all share relationships with a user (as initiator)
         case "removeUserShare":
@@ -1637,16 +1625,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().removeUserShare(
-                Int64(memberId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().removeMember(withMemberId: memberId, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Remove all received share relationships with a user (as receiver)
         case "removeReceivedUserShare":
@@ -1657,16 +1643,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().removeReceivedUserShare(
-                Int64(memberId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().removeReceiveMember(withMemberId: memberId, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Remove a specific device from active share with a user
         case "disableDevShare":
@@ -1678,17 +1662,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "devId, memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().disableDevShare(
-                devId,
-                memberId: Int64(memberId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().remove(withMemberId: memberId, devId: devId, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Remove a received shared device
         case "removeReceivedDevShare":
@@ -1699,16 +1680,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "devId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().removeReceivedDevShare(
-                devId,
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().removeReceive(withDevId: devId, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Rename the nickname/note for a user you have shared devices with
         case "renameShareNickname":
@@ -1720,17 +1699,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId, name required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().renameShareNickname(
-                Int64(memberId),
-                name: name,
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().renameShareMemberName(withMemberId: memberId, name: name, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Rename the nickname/note for a user who shared devices with you
         case "renameReceivedShareNickname":
@@ -1742,17 +1718,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "memberId, name required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().renameReceivedShareNickname(
-                Int64(memberId),
-                name: name,
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().renameReceiveMemberName(withMemberId: memberId, name: name, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Send a device share invitation (returns share ID)
         case "inviteShare":
@@ -1767,20 +1740,15 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().inviteShare(
-                devId,
-                userAccount: userAccount,
-                countryCode: countryCode,
-                success: { shareId in
-                    result(shareId)
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().invite(withCountryCode: countryCode, userAccount: userAccount,
+                                               devId: devId, success: { shareId in
+                result(Int(shareId))
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Confirm a share invitation by share ID
         case "confirmShareInvite":
@@ -1791,16 +1759,14 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "shareId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().confirmShareInviteShare(
-                Int32(shareId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().confirmInviteShare(withShareId: shareId, success: {
+                result(nil)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Query the list of users who are sharing a specific group
         case "queryGroupSharedUserList":
@@ -1811,19 +1777,15 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "groupId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().queryGroupSharedUserList(
-                Int64(groupId),
-                success: { list in
-                    let mapped = (list ?? []).map { self.sharedUserInfoBeanToMap($0) }
-                    result(mapped)
-                },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().getGroupShareMemberList(withGroupId: String(groupId), success: { list in
+                let mapped = (list ?? []).map { self.shareMemberModelToMap($0) }
+                result(mapped)
+            }, failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Share a group with a user
         case "addShareUserForGroup":
@@ -1839,19 +1801,17 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                                     details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().addShareUser(
-                forGroup: Int64(homeId),
-                countryCode: countryCode,
-                userAccount: userAccount,
-                groupId: Int64(groupId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().addGroupShareToMember(withSpaceId: Int64(homeId),
+                                                              countyCode: countryCode,
+                                                              userAccount: userAccount,
+                                                              groupId: String(groupId),
+                                                              success: { _ in result(nil) },
+                                                              failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         // Remove a member from a group share
         case "removeGroupShare":
@@ -1863,17 +1823,15 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "MISSING_ARGS", message: "groupId, memberId required", details: nil))
                 return
             }
-            ThingHomeSdk.getDeviceShareInstance().removeGroupShare(
-                Int64(groupId),
-                memberId: Int64(memberId),
-                success: { result(nil) },
-                failure: { error in
-                    let nsErr = error as NSError?
-                    result(FlutterError(code: String(nsErr?.code ?? -1),
-                                        message: nsErr?.localizedDescription ?? "Unknown error",
-                                        details: nil))
-                }
-            )
+            ThingSmartHomeDeviceShare().removeGroupShare(withRelationId: memberId,
+                                                         groupId: String(groupId),
+                                                         success: { result(nil) },
+                                                         failure: { error in
+                let nsErr = error as NSError?
+                result(FlutterError(code: String(nsErr?.code ?? -1),
+                                    message: nsErr?.localizedDescription ?? "Unknown error",
+                                    details: nil))
+            })
 
         default:
             result(FlutterMethodNotImplemented)
@@ -1882,49 +1840,53 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
 
     // MARK: – Share Helper Methods
 
-    private func sharedUserInfoBeanToMap(_ bean: ThingSharedUserInfoBean?) -> [String: Any] {
-        guard let b = bean else { return [:] }
+    private func shareMemberModelToMap(_ model: ThingSmartShareMemberModel?) -> [String: Any] {
+        guard let m = model else { return [:] }
         return [
-            "memberId": b.memberId,
-            "headPic": b.headPic ?? "",
-            "name": b.name ?? "",
-            "remarkName": b.remarkName ?? "",
-            "shareDevList": (b.shareDevList ?? []).map { dev -> [String: Any] in
-                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
-            }
+            "memberId": m.memberId,
+            "nickName": m.nickName ?? "",
+            "userName": m.userName ?? "",
+            "iconUrl": m.iconUrl ?? "",
+            "shareMode": m.shareMode.rawValue,
+            "endTime": m.endTime,
+            "uid": m.uid ?? ""
         ]
     }
 
-    private func shareSentUserDetailBeanToMap(_ bean: ThingShareSentUserDetailBean?) -> [String: Any] {
-        guard let b = bean else { return [:] }
+    private func shareMemberDetailModelToMap(_ model: ThingSmartShareMemberDetailModel?) -> [String: Any] {
+        guard let m = model else { return [:] }
         var map: [String: Any] = [
-            "memberId": b.memberId,
-            "headPic": b.headPic ?? "",
-            "name": b.name ?? "",
-            "remarkName": b.remarkName ?? ""
+            "mobile": m.mobile ?? "",
+            "name": m.name ?? "",
+            "remarkName": m.remarkName ?? "",
+            "autoSharing": m.autoSharing
         ]
-        if let devList = b.devList {
-            map["devList"] = devList.map { dev -> [String: Any] in
-                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
-            }
+        map["devices"] = m.devices.map { dev -> [String: Any] in
+            return ["devId": dev.devId ?? "", "name": dev.name ?? "", "iconUrl": dev.iconUrl ?? ""]
         }
         return map
     }
 
-    private func shareReceivedUserDetailBeanToMap(_ bean: ThingShareReceivedUserDetailBean?) -> [String: Any] {
-        guard let b = bean else { return [:] }
+    private func shareReceiveMemberDetailModelToMap(_ model: ThingSmartReceiveMemberDetailModel?) -> [String: Any] {
+        guard let m = model else { return [:] }
         var map: [String: Any] = [
-            "memberId": b.memberId,
-            "headPic": b.headPic ?? "",
-            "name": b.name ?? "",
-            "remarkName": b.remarkName ?? ""
+            "mobile": m.mobile ?? "",
+            "name": m.name ?? "",
+            "remarkName": m.remarkName ?? ""
         ]
-        if let devList = b.devList {
-            map["devList"] = devList.map { dev -> [String: Any] in
-                return ["devId": dev.devId ?? "", "name": dev.name ?? ""]
-            }
+        map["devices"] = m.devices.map { dev -> [String: Any] in
+            return ["devId": dev.devId ?? "", "name": dev.name ?? "", "iconUrl": dev.iconUrl ?? ""]
         }
         return map
+    }
+
+    private func receivedShareUserModelToMap(_ model: ThingSmartReceivedShareUserModel?) -> [String: Any] {
+        guard let m = model else { return [:] }
+        return [
+            "name": m.name ?? "",
+            "mobile": m.mobile ?? "",
+            "email": m.email ?? ""
+        ]
     }
 }
 
@@ -1932,11 +1894,13 @@ public class TuyaFlutterHaSdkPlugin: NSObject, FlutterPlugin {
 extension TuyaFlutterHaSdkPlugin: FlutterStreamHandler {
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         pairingManager.pairingEventSink = events
+        self.pairingEventSink = events
         return nil
     }
     
     public func onCancel(withArguments arguments: Any?) -> FlutterError? {
         pairingManager.pairingEventSink = nil
+        self.pairingEventSink = nil
         return nil
     }
 }
@@ -1997,7 +1961,77 @@ extension TuyaFlutterHaSdkPlugin: ThingSmartActivatorDelegate {
         pairingEventSink?(["event": "onPassWiFiToSecurityDevice",
                            "uuid": uuid ?? ""]) }
     
-    
+    // MARK: - OTA Polling Fallback
+    private func startOTAProgressMonitor(device: ThingSmartDevice, types: [Int]) {
+        stopOTAProgressMonitor()
+        guard !types.isEmpty else { return }
+        otaPollingDevice = device
+        otaPollingTypes = Set(types)
+        otaPollingActive = true
+        let devId = device.deviceModel.devId ?? ""
+        for type in types {
+            pairingEventSink?([
+                "event": "otaUpdateStatusChanged",
+                "devId": devId,
+                "status": [
+                    "upgradeStatus": 2,
+                    "type": type,
+                    "progress": 0,
+                    "upgradeMode": 0,
+                    "statusText": "",
+                    "statusTitle": ""
+                ]
+            ])
+        }
+        var pollCount = 0
+        otaPollingTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] timer in
+            guard let self = self, self.otaPollingActive else { timer.invalidate(); return }
+            pollCount += 1
+            if pollCount > 75 {
+                timer.invalidate()
+                self.otaPollingActive = false
+                return
+            }
+            self.pollOTACompletion(device: device)
+        }
+    }
+
+    private func pollOTACompletion(device: ThingSmartDevice) {
+        let devId = device.deviceModel.devId ?? ""
+        device.checkFirmwareUpgrade({ [weak self] firmwares in
+            guard let self = self, self.otaPollingActive else { return }
+            let completedTypes = firmwares.filter {
+                self.otaPollingTypes.contains($0.type) && $0.upgradeStatus.rawValue == 0
+            }.map { $0.type }
+            if completedTypes.count == self.otaPollingTypes.count {
+                self.stopOTAProgressMonitor()
+                for type in completedTypes {
+                    self.pairingEventSink?([
+                        "event": "otaUpdateStatusChanged",
+                        "devId": devId,
+                        "status": [
+                            "upgradeStatus": 3,
+                            "type": type,
+                            "progress": 100,
+                            "upgradeMode": 0,
+                            "statusText": "",
+                            "statusTitle": ""
+                        ]
+                    ])
+                }
+            }
+        }, failure: { _ in })
+    }
+
+    private func stopOTAProgressMonitor() {
+        otaPollingTimer?.invalidate()
+        otaPollingTimer = nil
+        otaPollingActive = false
+        otaPollingDevice = nil
+        otaPollingTypes = []
+    }
+
+
 }
 extension TuyaFlutterHaSdkPlugin: ThingSmartDeviceDelegate {
     open func device(_ device: ThingSmartDevice, dpsUpdate dps: [AnyHashable: Any]) {
@@ -2014,6 +2048,10 @@ extension TuyaFlutterHaSdkPlugin: ThingSmartDeviceDelegate {
     open func deviceInfoUpdate(_ device: ThingSmartDevice) {
         print(" Device Info Update")
         self.pairingEventSink?(device.deviceModel.dps)
+        if otaPollingActive, let pollDevice = otaPollingDevice,
+           pollDevice.deviceModel.devId == device.deviceModel.devId {
+            pollOTACompletion(device: device)
+        }
     }
     public func device(_ device: ThingSmartDevice!, signal: String!) {
         print(" signal : \(signal)")
@@ -2025,6 +2063,59 @@ extension TuyaFlutterHaSdkPlugin: ThingSmartDeviceDelegate {
             "event": "otaUpdateStatusChanged",
             "devId": device.deviceModel.devId ?? "",
             "status": firmwareStatusToMap(statusModel)
+        ])
+    }
+
+    public func device(_ device: ThingSmartDevice, firmwareUpgradeStatusModel upgradeStatusModel: ThingSmartFirmwareUpgradeStatusModel) {
+        self.pairingEventSink?([
+            "event": "otaUpdateStatusChanged",
+            "devId": device.deviceModel.devId ?? "",
+            "status": firmwareStatusToMap(upgradeStatusModel)
+        ])
+    }
+
+    public func deviceFirmwareUpgradeSuccess(_ device: ThingSmartDevice!, type: Int) {
+        self.pairingEventSink?([
+            "event": "otaUpdateStatusChanged",
+            "devId": device?.deviceModel.devId ?? "",
+            "status": [
+                "upgradeStatus": 3,
+                "type": type,
+                "progress": 100,
+                "upgradeMode": 0,
+                "statusText": "",
+                "statusTitle": ""
+            ]
+        ])
+    }
+
+    public func deviceFirmwareUpgradeFailure(_ device: ThingSmartDevice!, type: Int) {
+        self.pairingEventSink?([
+            "event": "otaUpdateStatusChanged",
+            "devId": device?.deviceModel.devId ?? "",
+            "status": [
+                "upgradeStatus": 4,
+                "type": type,
+                "progress": 0,
+                "upgradeMode": 0,
+                "statusText": "",
+                "statusTitle": ""
+            ]
+        ])
+    }
+
+    public func device(_ device: ThingSmartDevice!, firmwareUpgradeProgress type: Int, progress: Double) {
+        self.pairingEventSink?([
+            "event": "otaUpdateStatusChanged",
+            "devId": device?.deviceModel.devId ?? "",
+            "status": [
+                "upgradeStatus": 2,
+                "type": type,
+                "progress": Int(progress),
+                "upgradeMode": 0,
+                "statusText": "",
+                "statusTitle": ""
+            ]
         ])
     }
 }

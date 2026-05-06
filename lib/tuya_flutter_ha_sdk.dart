@@ -1934,6 +1934,13 @@ class TuyaFlutterHaSdk {
         message: "devId should be specified",
       );
     }
+    if (firmwares.isEmpty) {
+      throw PlatformException(
+        code: "INVALID_PARAMETER",
+        message:
+            "firmwares cannot be empty; pass the filtered list from checkFirmwareUpgrade",
+      );
+    }
     return TuyaFlutterHaSdkPlatform.instance.startFirmwareUpgrade(
       devId: devId,
       firmwares: firmwares,

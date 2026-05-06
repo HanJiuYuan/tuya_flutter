@@ -226,6 +226,7 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     private Object ensureOtaService(String devId) {
         if (otaService == null || otaServiceDevId == null || !otaServiceDevId.equals(devId)) {
             otaService = null;
+            otaListenerProxy = null;
             try {
                 otaService = ThingHomeSdk.class
                         .getMethod("newOTAServiceInstance", String.class)
@@ -292,6 +293,10 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
     }
 
     private Object createCallbackProxy(Class<?> callbackClazz, OtaCallbackHandler handler) {
+        return createCallbackProxy(callbackClazz, handler, null);
+    }
+
+    private Object createCallbackProxy(Class<?> callbackClazz, OtaCallbackHandler handler, @Nullable String statusDevId) {
         if (callbackClazz == null) return null;
         return java.lang.reflect.Proxy.newProxyInstance(
                 callbackClazz.getClassLoader(),
@@ -314,6 +319,7 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                             if (eventSink != null) {
                                 HashMap<String, Object> payload = new HashMap<>();
                                 payload.put("event", "otaUpdateStatusChanged");
+                                if (statusDevId != null) payload.put("devId", statusDevId);
                                 Object statusBean = (args != null && args.length > 0) ? args[0] : null;
                                 payload.put("status", toJsonObject(statusBean));
                                 eventSink.success(payload);
@@ -556,7 +562,23 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     ThingHomeSdk.init(appContext, appKey, appSecret);
                     ThingHomeSdk.setDebugMode(isDebug);
 
-                    // 2. Optimus SDK：用于锁等扩展能力，在 demo 中也在 Application 级别初始化
+                    // 2. 注册 Application 的 ActivityLifecycleCallbacks，让 SDK 正确感知前后台状态
+                    //    否则 SDK 内部 isForeground 始终为 false，OTA 等服务无法正常工作
+                    try {
+                        Class<?> launcherClazz = Class.forName("com.thingclips.smart.api.start.LauncherApplicationAgent");
+                        Object agent = launcherClazz.getMethod("getInstance").invoke(null);
+                        if (agent != null) {
+                            boolean created = (Boolean) launcherClazz.getMethod("isCreated").invoke(agent);
+                            if (!created) {
+                                launcherClazz.getMethod("onCreate", android.app.Application.class).invoke(agent, appContext);
+                                Log.i("TuyaFlutterHaSdk", "LauncherApplicationAgent.onCreate registered lifecycle callbacks");
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.w("TuyaFlutterHaSdk", "LauncherApplicationAgent setup failed (non-fatal): " + t.getMessage());
+                    }
+
+                    // 3. Optimus SDK：用于锁等扩展能力，在 demo 中也在 Application 级别初始化
                     ThingOptimusSdk.init(appContext);
 
                     // 3. Fresco：相机/消息等模块依赖的图片库，对齐 CameraUtils.init 内部的 Fresco 初始化
@@ -1056,12 +1078,11 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     break;
                 }
                 try {
+                    // Android SDK: getFirmwareUpgradeInfo is the correct new API
+                    // (supports both regular firmware and PID upgrades)
                     Method checkMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradeInfo", 1);
                     if (checkMethod == null) {
-                        checkMethod = findMethodByNameAndArgCount(service, "checkFirmwareUpgrade", 1);
-                    }
-                    if (checkMethod == null) {
-                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo/checkFirmwareUpgrade not found", null);
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo not found", null);
                         break;
                     }
                     Class<?> cbClazz = checkMethod.getParameterTypes()[0];
@@ -1095,12 +1116,12 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                     break;
                 }
                 try {
-                    Method statusMethod = findMethodByNameAndArgCount(service, "getUpgradeProgress", 1);
+                    Method statusMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradingStatus", 1);
                     if (statusMethod == null) {
-                        statusMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradingStatus", 1);
+                        statusMethod = findMethodByNameAndArgCount(service, "getUpgradeProgress", 1);
                     }
                     if (statusMethod == null) {
-                        result.error("NOT_SUPPORTED", "getUpgradeProgress/getFirmwareUpgradingStatus not found", null);
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradingStatus/getUpgradeProgress not found", null);
                         break;
                     }
                     Class<?> cbClazz = statusMethod.getParameterTypes()[0];
@@ -1141,10 +1162,7 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                 try {
                     Method getInfoMethod = findMethodByNameAndArgCount(service, "getFirmwareUpgradeInfo", 1);
                     if (getInfoMethod == null) {
-                        getInfoMethod = findMethodByNameAndArgCount(service, "checkFirmwareUpgrade", 1);
-                    }
-                    if (getInfoMethod == null) {
-                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo/checkFirmwareUpgrade not found", null);
+                        result.error("NOT_SUPPORTED", "getFirmwareUpgradeInfo not found", null);
                         break;
                     }
                     Method startMethod = findMethodByNameAndArgCount(service, "startFirmwareUpgrade", 1);
@@ -1174,6 +1192,8 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                                             }
                                         }
                                         if (status == 1) {
+                                            Object canUpgradeObj = (m != null) ? m.get("canUpgrade") : null;
+                                            if (canUpgradeObj instanceof Number && ((Number) canUpgradeObj).intValue() == 0) continue;
                                             selected.add(item);
                                         }
                                     }
@@ -1182,6 +1202,16 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                                         if (item == null) continue;
                                         Map<String, Object> m = toMap(item);
                                         if (m == null) continue;
+                                        Object upgradeStatusObj = m.get("upgradeStatus");
+                                        int upgradeStatusVal = -1;
+                                        if (upgradeStatusObj instanceof Number) {
+                                            upgradeStatusVal = ((Number) upgradeStatusObj).intValue();
+                                        } else if (upgradeStatusObj instanceof String) {
+                                            try { upgradeStatusVal = Integer.parseInt((String) upgradeStatusObj); } catch (Throwable ignore) {}
+                                        }
+                                        if (upgradeStatusVal != 1) continue;
+                                        Object canUpgradeObj = m.get("canUpgrade");
+                                        if (canUpgradeObj instanceof Number && ((Number) canUpgradeObj).intValue() == 0) continue;
                                         Object curType = m.get("type");
                                         Object curMode = m.get("upgradeMode");
                                         for (Map<String, Object> req : firmwares) {
@@ -1214,7 +1244,7 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                                             @Override
                                             public void onFailure(String code, String message) {
                                             }
-                                        });
+                                        }, devId);
                                         registerMethod.invoke(service, otaListenerProxy);
                                     }
                                 }
@@ -1317,12 +1347,16 @@ public class TuyaFlutterHaSdkPlugin implements FlutterPlugin, MethodChannel.Meth
                         });
                         break;
                     }
+                    if (otaType == null) {
+                        result.error("NOT_SUPPORTED", "cancelFirmwareUpgrade not found; otaType required for legacy SDK", null);
+                        break;
+                    }
                     Method legacyCancel = findMethodByNameAndArgCount(service, "cancelUpgradeFirmware", 2);
                     if (legacyCancel == null) {
                         result.error("NOT_SUPPORTED", "cancelFirmwareUpgrade/cancelUpgradeFirmware not found", null);
                         break;
                     }
-                    legacyCancel.invoke(service, otaType != null ? otaType : 0, new IResultCallback() {
+                    legacyCancel.invoke(service, otaType, new IResultCallback() {
                         @Override
                         public void onError(String code, String error) {
                             result.error(code, error, null);
