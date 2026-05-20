@@ -215,10 +215,7 @@ extension BluetoothPairingManager: ThingSmartBLEManagerDelegate {
                 result["isProuductKey"] = result["isProuductKey"]
                 result["icon"] = result["icon"]
                 result["isSupportMultiUserShare"] = result["isSupportMultiUserShare"]
-                // Add all available fields (name, icon, version, isActive, etc)
                 result["isActive"] = deviceInfo.isActive
-                // Print for debugging
-                print("Device discovered: \(deviceInfo.uuid ?? "") - icon: \(result["icon"] ?? "none") - name: \(result["name"] ?? "none") - isProuductKey: \(result["isProuductKey"] ?? "none") - isSupportMultiUserShare: \(result["isSupportMultiUserShare"] ?? "none") - bleProtocolV: \(result["bleProtocolV"] ?? "none") - productId: \(deviceInfo.productId ?? "") - mac: \(deviceInfo.mac ?? "none")")
                 self.discoveryCallback?(result)
             },
             failure: { _ in

@@ -26,4 +26,11 @@ public class TuyaFlutterHaSdkPluginTest {
 
     verify(mockResult).success("Android " + android.os.Build.VERSION.RELEASE);
   }
+
+  @Test
+  public void printPushTypes() {
+    for (com.thingclips.smart.sdk.bean.push.PushType type : com.thingclips.smart.sdk.bean.push.PushType.values()) {
+        System.out.println("PUSH_TYPE_ENUM: " + type.name() + " ordinal: " + type.ordinal());
+    }
+  }
 }

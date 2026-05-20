@@ -184,23 +184,8 @@ public class TuyaCameraPlugin: NSObject, FlutterPlugin {
                 return result(FlutterError(code:"MISSING_ARGS",
                                            message:"deviceId required", details:nil))
             }
-            guard
-                let device   = ThingSmartDevice(deviceId: deviceId)
-            else {
-                return result(FlutterError(code:"DEVICE_ERROR",
-                                           message:"Not able to initialize device", details:nil))
-            }
-            let m = device.deviceModel
-            guard m.isIPCDevice() else {
-                return result(FlutterError(code:"DEVICE_ERROR",
-                                           message:"Not an IPC device", details:nil))
-            }
-            guard m.isOnline else {
-                return result(FlutterError(code:"DEVICE_ERROR",
-                                           message:"Decice not online", details:nil))
-            }
-            self.tuyaCameraViewFactory?.stopCamera(devId: deviceId)
             result(nil)
+            self.tuyaCameraViewFactory?.stopCamera(devId: deviceId)
             
             // ────────────── single-way talk & mute
         case "startTalk":
@@ -691,6 +676,9 @@ class TuyaCameraViewFactory: NSObject, FlutterPlatformViewFactory {
                 viewIdentifier _: Int64,
                 arguments args: Any?) -> FlutterPlatformView {
         let devId = (args as? [String:Any])?["deviceId"] as? String ?? ""
+        if !devId.isEmpty, let oldView = cameraViews[devId] {
+            oldView.stopCamera()
+        }
         let platformView=TuyaCameraPlatformView(frame: frame, deviceId: devId)
         platformView.definitionChangedCallback = self.definitionChangedCallback
         tuyaCameraPlatformView=platformView
@@ -828,6 +816,10 @@ class TuyaCameraPlatformView:
     private var sdkView  : UIView?
     private var isMuted  : Bool = false
     private var isSupportedVideoSplitting = false
+    private var wantsPreview = false
+    private var isConnecting = false
+    private var isPreviewing = false
+    private var isStopping = false
     var definitionChangedCallback: ((Int) -> Void)?
     
     // 回放相关状态和回调
@@ -870,26 +862,35 @@ class TuyaCameraPlatformView:
             container.backgroundColor = .black
         }
         camera.enableMute(false, for: .preview)
-        camera.connect?(with: .auto)
-        camera.startPreview()
     }
     
     func view() -> UIView { container }
     deinit {
         camera?.stopPreview()
+        camera?.disConnect()
     }
     
     func cameraDidConnected(_ camera: ThingSmartCameraType!) {
         print("cameraDidConnected")
-        camera.startPreview() }
+        isConnecting = false
+        guard wantsPreview, !isPreviewing, !isStopping else { return }
+        camera.startPreview()
+    }
     func cameraDidBeginPreview(_ camera: ThingSmartCameraType!) {
         print("cameraDidBeginPreview")
+        isPreviewing = true
+        isStopping = false
         DispatchQueue.main.async { UIView.animate(withDuration:0.3){ self.sdkView?.alpha = 1 } }
     }
     func cameraDidStopPreview(_ camera: ThingSmartCameraType!) {
+        isPreviewing = false
         DispatchQueue.main.async { UIView.animate(withDuration:0.2){ self.sdkView?.alpha = 0 } }
     }
-    func cameraDidDisconnected(_ camera: ThingSmartCameraType!, specificErrorCode _: Int) {}
+    func cameraDidDisconnected(_ camera: ThingSmartCameraType!, specificErrorCode _: Int) {
+        isConnecting = false
+        isPreviewing = false
+        isStopping = false
+    }
     func camera(_ camera: ThingSmartCameraType!,
                 didOccurredErrorAtStep stepError: ThingCameraErrorCode,
                 specificErrorCode specificError: Int,extErrorCodeInfo: ThingSmartCameraExtErrorCodeInfo!) {
@@ -897,18 +898,42 @@ class TuyaCameraPlatformView:
         print(extErrorCodeInfo.debugDescription ?? "No info")
         print(specificError)
         print(stepError)
+        isConnecting = false
+        isPreviewing = false
+        isStopping = false
     }
     func startCamera(){
-        if(camera != nil){
-            camera.connect?(with: .auto)
-            camera.startPreview()
+        guard camera != nil else { return }
+        wantsPreview = true
+        isStopping = false
+
+        if isPreviewing {
+            DispatchQueue.main.async { UIView.animate(withDuration:0.2){ self.sdkView?.alpha = 1 } }
+            return
         }
+
+        if isConnecting {
+            return
+        }
+
+        isConnecting = true
+        camera.connect?(with: .auto)
     }
     func stopCamera(){
+        guard camera != nil else { return }
+        wantsPreview = false
+        isConnecting = false
+        isStopping = true
+        isPreviewing = false
+        DispatchQueue.main.async { UIView.animate(withDuration:0.2){ self.sdkView?.alpha = 0 } }
+
         // 主动停止预览并断开 P2P 连接，避免只 stopPreview 导致底层会话悬挂，
         // 出现多次调用后摄像头 SDK 报 -23 流冲突错误。
-        camera.stopPreview()
-        camera.disConnect()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self, !self.wantsPreview else { return }
+            self.camera.stopPreview()
+            self.camera.disConnect()
+        }
     }
     func startLocalRecording(filePath:String){
         camera.startRecord!(withFilePath: filePath)
@@ -1075,8 +1100,7 @@ class TuyaCameraPlatformView:
             return
         }
 
-        camera.connect?(with: .auto)
-        camera.startPreview()
+        startCamera()
         payload["connected"] = true
         result(payload)
     }
@@ -1230,4 +1254,3 @@ class TuyaCameraPlatformView:
         // 视频片段播放结束
     }
 }
-
